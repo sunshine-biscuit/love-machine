@@ -5,31 +5,38 @@ import os
 import textwrap
 import random
 
+# Initialise Pygame
 pygame.init()
 pygame.mixer.init()
 
+# Screen setup
 WIDTH, HEIGHT = 800, 480
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
 pygame.display.set_caption("Love Machine")
 clock = pygame.time.Clock()
 
+# File paths
 ASSETS_DIR = os.path.join(os.path.dirname(__file__), "assets")
 FONT_PATH = os.path.join(ASSETS_DIR, "PressStart2P-Regular.ttf")
 STARTUP_SOUND_PATH = os.path.join(ASSETS_DIR, "startup.wav")
 KEYPRESS_SOUND_PATH = os.path.join(ASSETS_DIR, "keypress.wav")
 
+# Load sounds
 startup_sound = pygame.mixer.Sound(STARTUP_SOUND_PATH)
 keypress_sound = pygame.mixer.Sound(KEYPRESS_SOUND_PATH)
 keypress_sound.set_volume(0.2)
 
+# Load font
 FONT_SIZE = 24
 font = pygame.font.Font(FONT_PATH, FONT_SIZE)
 
+# Text color and background
 TEXT_COLOR = (0, 255, 0)
 BG_COLOR = (0, 0, 0)
 
+# Slides: (text, face_style)
 slides = [
-    ("Hello, and welcome to the Love Machine.", "smile"),
+    ("Hello, and welcome to Love Machine.", "smile"),
     ("Please place your handwritten note in the tray.", "smile"),
     ("When you are ready, press ENTER to begin.", "smile"),
     ("We are reading your message...", "smile"),
@@ -37,14 +44,15 @@ slides = [
     ("Here is your artifact. Take it with care.", "smile")
 ]
 
+# Pixel-art faces (two eyes and a centered smile)
 faces = {
     "smile": [
-        "0011001000",  # eyes as vertical rectangles (two '1's per eye column)
-        "0011001000",
+        "0100000010",
+        "0100000010",
         "0000000000",
         "0000000000",
         "0000000000",
-        "0111111100",  # mouth wider than eyes — smile curve
+        "0011111100",
         "0000000000",
         "0000000000",
         "0000000000",
@@ -56,7 +64,7 @@ faces = {
         "0000000000",
         "0000000000",
         "0000000000",
-        "0111111100",  # mouth stays visible on blink
+        "0011111100",
         "0000000000",
         "0000000000",
         "0000000000",
@@ -64,24 +72,18 @@ faces = {
     ]
 }
 
+# Blinking config
 face_blink_on_interval = 5000
 face_blink_off_duration = 500
 last_face_blink_time = 0
 face_blink_state = False
 face_is_blinking = False
 
-def draw_scanlines():
-    # Very subtle scanlines — almost like a faint dark green line every 4 pixels
-    for y in range(0, HEIGHT, 4):
-        pygame.draw.line(screen, (0, 15, 0), (0, y), (WIDTH, y), 1)
 
-def draw_glowing_rect(rect, glow_color=(0, 255, 0), glow_radius=6):
-    glow_surface = pygame.Surface((rect.width + glow_radius*2, rect.height + glow_radius*2), pygame.SRCALPHA)
-    for i in range(glow_radius, 0, -1):
-        alpha = max(10, 40 - i * 5)
-        pygame.draw.rect(glow_surface, (*glow_color, alpha),
-                         (glow_radius - i, glow_radius - i, rect.width + i*2, rect.height + i*2), border_radius=2)
-    screen.blit(glow_surface, (rect.x - glow_radius, rect.y - glow_radius))
+def draw_scanlines():
+    for y in range(0, HEIGHT, 4):
+        pygame.draw.line(screen, (10, 30, 10), (0, y), (WIDTH, y), 1)
+
 
 def draw_face(style="smile", block_size=16):
     global last_face_blink_time, face_blink_state, face_is_blinking
@@ -113,8 +115,10 @@ def draw_face(style="smile", block_size=16):
                 )
                 pygame.draw.rect(screen, TEXT_COLOR, rect)
 
+
 def wrap_text(text, max_chars):
     return textwrap.wrap(text, width=max_chars)
+
 
 def type_text_lines(lines, x, y_start, line_spacing=32, face=True):
     y = y_start
@@ -132,7 +136,7 @@ def type_text_lines(lines, x, y_start, line_spacing=32, face=True):
             rendered = font.render(partial_text, True, TEXT_COLOR)
             screen.blit(rendered, (x, y))
             pygame.display.flip()
-            #keypress_sound.play()
+            keypress_sound.play()
             pygame.time.wait(40)
         y += line_spacing
         pygame.time.wait(200)
@@ -167,6 +171,7 @@ def type_text_lines(lines, x, y_start, line_spacing=32, face=True):
             blink = not blink
             last_blink = pygame.time.get_ticks()
 
+
 def fade_to_black():
     fade = pygame.Surface((WIDTH, HEIGHT))
     fade.fill((0, 0, 0))
@@ -175,6 +180,7 @@ def fade_to_black():
         screen.blit(fade, (0, 0))
         pygame.display.update()
         pygame.time.delay(30)
+
 
 def boot_up_sequence():
     screen.fill(BG_COLOR)
@@ -190,6 +196,7 @@ def boot_up_sequence():
         "System ready."
     ]
     type_text_lines(boot_lines, 50, 100, face=False)
+
 
 def wait_for_enter(message="Press ENTER to begin.", show_face=False):
     blink = True
@@ -216,13 +223,15 @@ def wait_for_enter(message="Press ENTER to begin.", show_face=False):
             blink = not blink
             last_blink = pygame.time.get_ticks()
 
+
 def show_slide(text, face_style="smile"):
     wrapped_lines = wrap_text(text, 40)
     type_text_lines(wrapped_lines, 50, HEIGHT - 160, face=(face_style != None))
 
+
 def main():
     while True:
-        wait_for_enter("Welcome to Love Machine. Press ENTER to begin.", show_face=False)
+        wait_for_enter("Press ENTER to begin.", show_face=False)
         screen.fill(BG_COLOR)
         pygame.display.flip()
 
@@ -235,5 +244,7 @@ def main():
         fade_to_black()
         wait_for_enter("Press ENTER to begin.", show_face=False)
 
+
 if __name__ == "__main__":
     main()
+p
