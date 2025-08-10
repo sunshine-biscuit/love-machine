@@ -24,25 +24,33 @@ TEXT = (0, 255, 0)   # phosphor green
 BG   = (0, 2, 0)     # dark, almost black
 
 # ====== CRT compositor (bright, no flicker) ======
+# ====== CRT compositor (bright, no flicker, Pi-optimised) ======
 class CRTPipeline:
     def __init__(self, size, palette="green"):
         self.w, self.h = size
         self.fx = pygame.Surface(size).convert_alpha()
-        self.scan = self._make_scanlines(alpha=40)        # lighter scanlines
-        self.vign = self._make_vignette(strength=0.28)    # subtle vignette
+        # Prebuilt overlays
+        self.scan = self._make_scanlines(alpha=36)        # lighter scanlines
+        self.vign = self._make_vignette(strength=0.24)    # subtle vignette
         self.mask = None
         self.brightness_boost = 28  # global brightness lift
+
+        # Glow cache to avoid recomputing every frame on Pi
+        self.cached_glow = None
+        self.frame = 0
+        self.glow_every_n = 6  # recompute glow every N frames (tune if needed)
+
         self.palette = {"green": ((0,255,102), (6,18,8)),
                         "amber": ((255,176,0), (20,12,6))}.get(palette, ((0,255,102),(6,18,8)))
 
-    def _make_scanlines(self, alpha=40):
+    def _make_scanlines(self, alpha=36):
         s = pygame.Surface((self.w, self.h), flags=pygame.SRCALPHA)
         dark = (0,0,0,alpha)
         for y in range(0, self.h, 2):
             s.fill(dark, (0,y,self.w,1))
         return s
 
-    def _make_vignette(self, strength=0.28):
+    def _make_vignette(self, strength=0.24):
         s = pygame.Surface((self.w, self.h), flags=pygame.SRCALPHA)
         cx, cy = self.w/2, self.h/2
         maxd = (cx**2 + cy**2) ** 0.5
@@ -56,28 +64,37 @@ class CRTPipeline:
         return s
 
     def _blur(self, surf, passes=1):
-        tmp = surf.copy()
+        # Cheaper blur: downscale to 1/2 then upsample once
+        tmp = surf
         for _ in range(passes):
             small = pygame.transform.smoothscale(tmp, (max(1,self.w//2), max(1,self.h//2)))
             tmp = pygame.transform.smoothscale(small, (self.w, self.h))
         return tmp
 
     def compose(self, source_surface):
-        glow = self._blur(source_surface, passes=1)
-        glow.set_alpha(70)
+        # Recompute glow only every N frames; reuse cache in between
+        if self.frame % self.glow_every_n == 0 or self.cached_glow is None:
+            glow = self._blur(source_surface, passes=1)
+            glow.set_alpha(70)
+            self.cached_glow = glow
+        else:
+            glow = self.cached_glow
 
+        # Assemble
         self.fx.blit(source_surface, (0,0))
         self.fx.blit(glow, (0,0), special_flags=pygame.BLEND_ADD)
         self.fx.blit(self.scan, (0,0))
         if self.mask:
             self.fx.blit(self.mask, (0,0), special_flags=pygame.BLEND_MULT)
-        self.fx.blit(self.vign, (0,0))
+        self.fx.blit(self.vignette, (0,0)) if hasattr(self, "vignette") else self.fx.blit(self.vign, (0,0))
 
+        # Global brightness boost
         if self.brightness_boost:
             lift = pygame.Surface((self.w, self.h), pygame.SRCALPHA)
             lift.fill((self.brightness_boost, self.brightness_boost, self.brightness_boost, 0))
             self.fx.blit(lift, (0,0), special_flags=pygame.BLEND_ADD)
 
+        self.frame += 1
         return self.fx
 
 crt = CRTPipeline((WIDTH, HEIGHT), palette="green")
@@ -171,7 +188,7 @@ def type_lines_then_wait(lines, y_start):
             s = font.render(line[:i], True, TEXT)
             screen.blit(s, (x, y_start + li*line_spacing))
             present()
-            soft_wait(35)
+            soft_wait(10)
         soft_wait(120)
     blink = True
     last = pygame.time.get_ticks()
@@ -399,7 +416,7 @@ def show_text_block(text, face_style="smile", glitch=False):
             s = font.render(line[:k], True, TEXT)
             screen.blit(s, (x, base_y + i*line_spacing))
             present()
-            soft_wait(30)
+            soft_wait(8)
         typed[i] = line
         soft_wait(100)
 
