@@ -16,29 +16,47 @@ clock = pygame.time.Clock()
 # Paths & font
 ASSETS_DIR = os.path.join(os.path.dirname(__file__), "assets")
 FONT_PATH = os.path.join(ASSETS_DIR, "Px437_IBM_DOS_ISO8.ttf")
-FONT_SIZE = 24
+FONT_SIZE = 26
 font = pygame.font.Font(FONT_PATH, FONT_SIZE)
 
 # Colors
-TEXT = (0, 255, 0)   # phosphor green
+TEXT = (0, 255, 0)  # bright neon green
 BG   = (0, 2, 0)     # dark, almost black
 
-# ====== CRT compositor (bright, no flicker) ======
-# ====== CRT compositor (bright, no flicker, Pi-optimised) ======
+# ====== Pi speed config ======
+PI_FAST = True
+
+# Typing / pacing
+TYPE_CHAR_MS      = 6   if PI_FAST else 10   # per-character delay (smaller = faster)
+LINE_PAUSE_MS     = 60  if PI_FAST else 120  # pause after each full line
+POST_LINE_PAUSE_MS= 60                        # small pause after a line is done
+BLINK_INTERVAL_MS = 450                       # cursor blink timing
+
+# CRT effect costs
+CRT_ENABLE_GLOW       = True     # turn glow back on
+CRT_GLOW_EVERY_N      = 1        # recompute every frame to avoid trails
+CRT_BRIGHTNESS_BOOST  = 12       # slightly lower boost (reduces smear look)
+SCANLINE_ALPHA        = 20       # a touch lighter scanlines
+VIGNETTE_STRENGTH     = 0.10     # lighter vignette = crisper text edges
+
+
+
+#CRT pipeline / effects
 class CRTPipeline:
     def __init__(self, size, palette="green"):
         self.w, self.h = size
         self.fx = pygame.Surface(size).convert_alpha()
         # Prebuilt overlays
-        self.scan = self._make_scanlines(alpha=36)        # lighter scanlines
-        self.vign = self._make_vignette(strength=0.24)    # subtle vignette
+        self.scan = self._make_scanlines(alpha=SCANLINE_ALPHA)
+        self.vign = self._make_vignette(strength=VIGNETTE_STRENGTH) if VIGNETTE_STRENGTH > 0 else None
         self.mask = None
-        self.brightness_boost = 28  # global brightness lift
+        self.brightness_boost = CRT_BRIGHTNESS_BOOST
 
-        # Glow cache to avoid recomputing every frame on Pi
+        # Glow cache (optional on Pi)
+        self.enable_glow = CRT_ENABLE_GLOW
         self.cached_glow = None
         self.frame = 0
-        self.glow_every_n = 6  # recompute glow every N frames (tune if needed)
+        self.glow_every_n = CRT_GLOW_EVERY_N
 
         self.palette = {"green": ((0,255,102), (6,18,8)),
                         "amber": ((255,176,0), (20,12,6))}.get(palette, ((0,255,102),(6,18,8)))
@@ -64,29 +82,32 @@ class CRTPipeline:
         return s
 
     def _blur(self, surf, passes=1):
-        # Cheaper blur: downscale to 1/2 then upsample once
+        # Cheaper than smoothscale on the Pi
         tmp = surf
         for _ in range(passes):
-            small = pygame.transform.smoothscale(tmp, (max(1,self.w//2), max(1,self.h//2)))
-            tmp = pygame.transform.smoothscale(small, (self.w, self.h))
+            small = pygame.transform.scale(tmp, (max(1,self.w//2), max(1,self.h//2)))
+            tmp = pygame.transform.scale(small, (self.w, self.h))
         return tmp
 
     def compose(self, source_surface):
-        # Recompute glow only every N frames; reuse cache in between
-        if self.frame % self.glow_every_n == 0 or self.cached_glow is None:
-            glow = self._blur(source_surface, passes=1)
-            glow.set_alpha(70)
-            self.cached_glow = glow
-        else:
-            glow = self.cached_glow
-
-        # Assemble
+        # Work on a clean target each call
+        self.fx.fill((0,0,0,0))
         self.fx.blit(source_surface, (0,0))
-        self.fx.blit(glow, (0,0), special_flags=pygame.BLEND_ADD)
-        self.fx.blit(self.scan, (0,0))
-        if self.mask:
-            self.fx.blit(self.mask, (0,0), special_flags=pygame.BLEND_MULT)
-        self.fx.blit(self.vignette, (0,0)) if hasattr(self, "vignette") else self.fx.blit(self.vign, (0,0))
+
+        # Glow with no cache = no ghosting
+        if self.enable_glow:
+            glow = self._blur(source_surface, passes=1)  # fast scale down/up
+            glow.set_alpha(56)                           # 48–64 is a good range
+            self.fx.blit(glow, (0,0), special_flags=pygame.BLEND_ADD)
+
+
+        # Scanlines
+        if self.scan:
+            self.fx.blit(self.scan, (0,0))
+
+        # Vignette
+        if self.vign:
+            self.fx.blit(self.vign, (0,0))
 
         # Global brightness boost
         if self.brightness_boost:
@@ -97,12 +118,15 @@ class CRTPipeline:
         self.frame += 1
         return self.fx
 
+
 crt = CRTPipeline((WIDTH, HEIGHT), palette="green")
 
 def present():
     final = crt.compose(screen)
+    # We already drew into `screen`; `compose` built `final` on top of that snapshot.
     screen.blit(final, (0,0))
     pygame.display.flip()
+
 
 # ====== Lighting hooks ======
 def lights_fade_up(): pass
