@@ -215,9 +215,9 @@ def type_lines_then_wait(lines, y_start):
 faces = {
     "smile": [
         "0000000000000000",
-        "0000010000100000",
-        "0000010000100000",
-        "0000010000100000",
+        "0000010001000000",
+        "0000010001000000",
+        "0000010001000000",
         "0000000000000000",
         "0010000000001000",
         "0001000000010000",
@@ -226,9 +226,9 @@ faces = {
     ],
     "neutral": [
         "0000000000000000",
-        "0000010000100000",
-        "0000010000100000",
-        "0000010000100000",
+        "0000010001000000",
+        "0000010001000000",
+        "0000010001000000",
         "0000000000000000",
         "0000000000000000",
         "0000000000000000",
@@ -237,9 +237,9 @@ faces = {
     ],
     "sad": [
         "0000000000000000",
-        "0000010000100000",
-        "0000010000100000",
-        "0000010000100000",
+        "0000010001000000",
+        "0000010001000000",
+        "0000010001000000",
         "0000000000000000",
         "0000111111110000",
         "0001000000010000",
@@ -534,7 +534,7 @@ def main_sequence():
         show_text_block("ready?", face_style="smile"); wait_for_enter_release()
         show_text_block("what was your first love? what happened? take your time, there is no rush. press enter when you are done."); wait_for_enter_release()
         show_text_block("all finished? great", face_style="smile"); wait_for_enter_release()
-        show_text_block("now feed the paper, face up into the slot on my left and press enter.", face_style="smile"); wait_for_enter_release()
+        show_text_block("now feed the paper, face up into the slot on your left and press enter.", face_style="smile"); wait_for_enter_release()
 
         # Processing + glitch
         glitch_face_moment("... oh.... that is.... very moving.. i had no idea..")
