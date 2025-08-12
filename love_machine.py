@@ -20,28 +20,27 @@ FONT_SIZE = 26
 font = pygame.font.Font(FONT_PATH, FONT_SIZE)
 
 # Colors
-TEXT = (0, 255, 0)  # bright neon green
+TEXT = (0, 255, 0)   # bright neon green
 BG   = (0, 2, 0)     # dark, almost black
+
+# ====== Typing speed (time‑based) ======
+TYPE_CPS = 110        # characters per second on Pi (try 90–140)
+LINE_PAUSE_MS = 60
 
 # ====== Pi speed config ======
 PI_FAST = True
-
-# Typing / pacing
-TYPE_CHAR_MS      = 6   if PI_FAST else 10   # per-character delay (smaller = faster)
-LINE_PAUSE_MS     = 60  if PI_FAST else 120  # pause after each full line
-POST_LINE_PAUSE_MS= 60                        # small pause after a line is done
-BLINK_INTERVAL_MS = 450                       # cursor blink timing
+TYPE_CHAR_MS       = 6 if PI_FAST else 10
+POST_LINE_PAUSE_MS = 60
+BLINK_INTERVAL_MS  = 450
 
 # CRT effect costs
-CRT_ENABLE_GLOW       = True     # turn glow back on
+CRT_ENABLE_GLOW       = True     # glow on
 CRT_GLOW_EVERY_N      = 1        # recompute every frame to avoid trails
 CRT_BRIGHTNESS_BOOST  = 12       # slightly lower boost (reduces smear look)
 SCANLINE_ALPHA        = 20       # a touch lighter scanlines
 VIGNETTE_STRENGTH     = 0.10     # lighter vignette = crisper text edges
 
-
-
-#CRT pipeline / effects
+# ====== CRT pipeline / effects ======
 class CRTPipeline:
     def __init__(self, size, palette="green"):
         self.w, self.h = size
@@ -52,11 +51,9 @@ class CRTPipeline:
         self.mask = None
         self.brightness_boost = CRT_BRIGHTNESS_BOOST
 
-        # Glow cache (optional on Pi)
+        # Glow toggle
         self.enable_glow = CRT_ENABLE_GLOW
-        self.cached_glow = None
         self.frame = 0
-        self.glow_every_n = CRT_GLOW_EVERY_N
 
         self.palette = {"green": ((0,255,102), (6,18,8)),
                         "amber": ((255,176,0), (20,12,6))}.get(palette, ((0,255,102),(6,18,8)))
@@ -65,7 +62,7 @@ class CRTPipeline:
         s = pygame.Surface((self.w, self.h), flags=pygame.SRCALPHA)
         dark = (0,0,0,alpha)
         for y in range(0, self.h, 2):
-            s.fill(dark, (0,y,self.w,1))
+            s.fill(dark, (0, y, self.w, 1))
         return s
 
     def _make_vignette(self, strength=0.24):
@@ -77,7 +74,7 @@ class CRTPipeline:
             for x in range(self.w):
                 d = ((x-cx)**2 + (y-cy)**2) ** 0.5 / maxd
                 a = int(255 * (d**1.8) * strength)
-                arr[x,y] = (0<<24) | (0<<16) | (0<<8) | a
+                arr[x, y] = (0<<24) | (0<<16) | (0<<8) | a
         del arr
         return s
 
@@ -85,7 +82,7 @@ class CRTPipeline:
         # Cheaper than smoothscale on the Pi
         tmp = surf
         for _ in range(passes):
-            small = pygame.transform.scale(tmp, (max(1,self.w//2), max(1,self.h//2)))
+            small = pygame.transform.scale(tmp, (max(1, self.w//2), max(1, self.h//2)))
             tmp = pygame.transform.scale(small, (self.w, self.h))
         return tmp
 
@@ -99,7 +96,6 @@ class CRTPipeline:
             glow = self._blur(source_surface, passes=1)  # fast scale down/up
             glow.set_alpha(56)                           # 48–64 is a good range
             self.fx.blit(glow, (0,0), special_flags=pygame.BLEND_ADD)
-
 
         # Scanlines
         if self.scan:
@@ -118,7 +114,6 @@ class CRTPipeline:
         self.frame += 1
         return self.fx
 
-
 crt = CRTPipeline((WIDTH, HEIGHT), palette="green")
 
 def present():
@@ -126,7 +121,6 @@ def present():
     # We already drew into `screen`; `compose` built `final` on top of that snapshot.
     screen.blit(final, (0,0))
     pygame.display.flip()
-
 
 # ====== Lighting hooks ======
 def lights_fade_up(): pass
@@ -151,6 +145,40 @@ def wait_for_enter_release():
             if event.type == pygame.KEYUP and event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
                 released = True
         clock.tick(60)
+
+# ====== Time-based typing helpers ======
+def _pump_basic_events():
+    for event in pygame.event.get():
+        if event.type == pygame.QUIT:
+            pygame.quit(); sys.exit()
+
+def type_out_line(line, drawn_lines, x, base_y, line_spacing, draw_face_style="smile", glitch=False):
+    """Time-based typewriter so speed is consistent even if FPS dips."""
+    target = (line or "").lower()
+    shown = 0
+    accum = 0.0
+    while shown < len(target):
+        dt = clock.tick(60) / 1000.0
+        accum += TYPE_CPS * dt
+        add = int(accum)
+        if add > 0:
+            shown = min(len(target), shown + add)
+            accum -= add
+
+        _pump_basic_events()
+        screen.fill(BG)
+        if draw_face_style:
+            draw_face(draw_face_style, glitch=glitch)
+        # draw previous full lines
+        for i, ln in enumerate(drawn_lines):
+            s = font.render(ln, True, TEXT)
+            screen.blit(s, (x, base_y + i*line_spacing))
+        # draw current partial
+        s = font.render(target[:shown], True, TEXT)
+        screen.blit(s, (x, base_y + len(drawn_lines)*line_spacing))
+        present()
+
+    soft_wait(LINE_PAUSE_MS)
 
 # ====== Text utils ======
 def wrap_text_to_width(text, max_width):
@@ -193,46 +221,9 @@ def wait_for_enter(message="press enter to begin.", show_face=False):
             if event.type == pygame.KEYDOWN and event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
                 return
 
-        if pygame.time.get_ticks() - last > 500:
+        if pygame.time.get_ticks() - last > BLINK_INTERVAL_MS:
             blink = not blink
             last = pygame.time.get_ticks()
-        clock.tick(60)
-
-def type_lines_then_wait(lines, y_start):
-    lines = [line.lower() for line in lines]
-    x = 50
-    line_spacing = 32
-    for li, line in enumerate(lines):
-        for i in range(len(line)+1):
-            screen.fill(BG)
-            draw_face("smile")
-            for j in range(li):
-                s = font.render(lines[j], True, TEXT)
-                screen.blit(s, (x, y_start + j*line_spacing))
-            s = font.render(line[:i], True, TEXT)
-            screen.blit(s, (x, y_start + li*line_spacing))
-            present()
-            soft_wait(10)
-        soft_wait(120)
-    blink = True
-    last = pygame.time.get_ticks()
-    while True:
-        screen.fill(BG)
-        draw_face("smile")
-        for i, line in enumerate(lines):
-            s = font.render(line, True, TEXT)
-            screen.blit(s, (x, y_start + i*line_spacing))
-        last_line_w = font.size(lines[-1])[0]
-        if blink:
-            pygame.draw.rect(screen, TEXT, (x + last_line_w + 6, y_start + (len(lines)-1)*line_spacing + 5, 10, 20))
-        present()
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                pygame.quit(); sys.exit()
-            if event.type == pygame.KEYDOWN and event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
-                return
-        if pygame.time.get_ticks() - last > 500:
-            blink = not blink; last = pygame.time.get_ticks()
         clock.tick(60)
 
 # ====== Face rendering (two vertical eyes, straight mouth w/ upturned ends) ======
@@ -336,24 +327,13 @@ def init_screen():
     base_y = 120
     line_spacing = 36
 
-    typed = [""] * len(lines)
-    idxs = [0] * len(lines)
-    current = 0
-    while current < len(lines):
-        screen.fill(BG)
-        for i in range(len(lines)):
-            s = font.render(typed[i], True, TEXT)
-            screen.blit(s, (x, base_y + i*line_spacing))
-        present()
+    # time-based typing for each line
+    typed = []
+    for line in lines:
+        type_out_line(line, typed, x, base_y, line_spacing, draw_face_style=None)
+        typed.append(line.lower())
 
-        if idxs[current] < len(lines[current]):
-            idxs[current] += 1
-            typed[current] = lines[current][:idxs[current]].lower()
-            soft_wait(25)
-        else:
-            current += 1
-            soft_wait(120)
-
+    # blink & wait for ENTER
     blink = True
     last = pygame.time.get_ticks()
     last_line_w = font.size(typed[-1])[0]
@@ -364,13 +344,13 @@ def init_screen():
             if event.type == pygame.KEYDOWN and event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
                 return
         screen.fill(BG)
-        for i in range(len(lines)):
+        for i in range(len(typed)):
             s = font.render(typed[i], True, TEXT)
             screen.blit(s, (x, base_y + i*line_spacing))
         if blink:
-            pygame.draw.rect(screen, TEXT, (x + last_line_w + 6, base_y + (len(lines)-1)*line_spacing + 5, 10, 20))
+            pygame.draw.rect(screen, TEXT, (x + last_line_w + 6, base_y + (len(typed)-1)*line_spacing + 5, 10, 20))
         present()
-        if pygame.time.get_ticks() - last > 500:
+        if pygame.time.get_ticks() - last > BLINK_INTERVAL_MS:
             blink = not blink; last = pygame.time.get_ticks()
         clock.tick(60)
 
@@ -409,7 +389,7 @@ def input_name_screen():
                         ch = ch.lower()
                         if 32 <= ord(ch) <= 126 and len(name) < 20:
                             name += ch
-        if pygame.time.get_ticks() - last > 500:
+        if pygame.time.get_ticks() - last > BLINK_INTERVAL_MS:
             blink = not blink; last = pygame.time.get_ticks()
         clock.tick(60)
 
@@ -425,24 +405,11 @@ def show_text_block(text, face_style="smile", glitch=False):
     if not lines:
         lines = [""]
 
-    # typewriter effect
-    typed = ["" for _ in lines]
-    for i, line in enumerate(lines):
-        for k in range(len(line)+1):
-            screen.fill(BG)
-            if face_style:
-                draw_face(face_style, glitch=glitch)
-            # previous full lines
-            for j in range(i):
-                s = font.render(lines[j], True, TEXT)
-                screen.blit(s, (x, base_y + j*line_spacing))
-            # current partial
-            s = font.render(line[:k], True, TEXT)
-            screen.blit(s, (x, base_y + i*line_spacing))
-            present()
-            soft_wait(8)
-        typed[i] = line
-        soft_wait(100)
+    # time-based typewriter for each line
+    typed = []
+    for line in lines:
+        type_out_line(line, typed, x, base_y, line_spacing, draw_face_style=face_style, glitch=glitch)
+        typed.append(line)
 
     # wait for ENTER with blinking cursor only
     blink = True
@@ -463,7 +430,7 @@ def show_text_block(text, face_style="smile", glitch=False):
         if blink:
             pygame.draw.rect(screen, TEXT, (x + last_line_w + 6, base_y + (len(typed)-1)*line_spacing + 5, 10, 20))
         present()
-        if pygame.time.get_ticks() - last > 500:
+        if pygame.time.get_ticks() - last > BLINK_INTERVAL_MS:
             blink = not blink; last = pygame.time.get_ticks()
         clock.tick(60)
 
@@ -507,7 +474,7 @@ def glitch_face_moment(text):
             )
         present()
 
-        if pygame.time.get_ticks() - last > 500:
+        if pygame.time.get_ticks() - last > BLINK_INTERVAL_MS:
             blink = not blink
             last = pygame.time.get_ticks()
 
