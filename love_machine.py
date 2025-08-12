@@ -20,25 +20,19 @@ FONT_SIZE = 26
 font = pygame.font.Font(FONT_PATH, FONT_SIZE)
 
 # Colors
-TEXT = (0, 255, 0)   # bright neon green
+TEXT = (0, 255, 0)   # bright green
 BG   = (0, 2, 0)     # dark, almost black
 
-# ====== Typing speed (time‑based) ======
-TYPE_CPS = 110        # characters per second on Pi (try 90–140)
-LINE_PAUSE_MS = 60
+# ====== Typing speed (letter-by-letter) ======
+TYPE_CHAR_MS   = 22   # ms per character (≈45 cps). Try 18–28 to taste.
+LINE_PAUSE_MS  = 90   # pause after a full line
+BLINK_INTERVAL_MS = 450
 
-# ====== Pi speed config ======
-PI_FAST = True
-TYPE_CHAR_MS       = 6 if PI_FAST else 10
-POST_LINE_PAUSE_MS = 60
-BLINK_INTERVAL_MS  = 450
-
-# CRT effect costs
-CRT_ENABLE_GLOW       = True     # glow on
-CRT_GLOW_EVERY_N      = 1        # recompute every frame to avoid trails
-CRT_BRIGHTNESS_BOOST  = 12       # slightly lower boost (reduces smear look)
-SCANLINE_ALPHA        = 20       # a touch lighter scanlines
-VIGNETTE_STRENGTH     = 0.10     # lighter vignette = crisper text edges
+# ====== Pi speed config (visual effects) ======
+CRT_ENABLE_GLOW       = True     # keep glow ON during typing
+CRT_BRIGHTNESS_BOOST  = 12       # small lift to keep text bright
+SCANLINE_ALPHA        = 20       # lighter scanlines for clarity
+VIGNETTE_STRENGTH     = 0.10     # subtle vignette, crisp edges
 
 # ====== CRT pipeline / effects ======
 class CRTPipeline:
@@ -51,10 +45,8 @@ class CRTPipeline:
         self.mask = None
         self.brightness_boost = CRT_BRIGHTNESS_BOOST
 
-        # Glow toggle
+        # Glow toggle (always on per your request)
         self.enable_glow = CRT_ENABLE_GLOW
-        self.frame = 0
-
         self.palette = {"green": ((0,255,102), (6,18,8)),
                         "amber": ((255,176,0), (20,12,6))}.get(palette, ((0,255,102),(6,18,8)))
 
@@ -79,7 +71,7 @@ class CRTPipeline:
         return s
 
     def _blur(self, surf, passes=1):
-        # Cheaper than smoothscale on the Pi
+        # Cheap blur for Pi: downscale/upsample once
         tmp = surf
         for _ in range(passes):
             small = pygame.transform.scale(tmp, (max(1, self.w//2), max(1, self.h//2)))
@@ -87,21 +79,18 @@ class CRTPipeline:
         return tmp
 
     def compose(self, source_surface):
-        # Work on a clean target each call
         self.fx.fill((0,0,0,0))
         self.fx.blit(source_surface, (0,0))
 
-        # Glow with no cache = no ghosting
+        # Glow ON (as requested)
         if self.enable_glow:
-            glow = self._blur(source_surface, passes=1)  # fast scale down/up
-            glow.set_alpha(56)                           # 48–64 is a good range
+            glow = self._blur(source_surface, passes=1)
+            glow.set_alpha(56)  # 48–64 is a good range
             self.fx.blit(glow, (0,0), special_flags=pygame.BLEND_ADD)
 
-        # Scanlines
+        # Scanlines + vignette
         if self.scan:
             self.fx.blit(self.scan, (0,0))
-
-        # Vignette
         if self.vign:
             self.fx.blit(self.vign, (0,0))
 
@@ -111,14 +100,12 @@ class CRTPipeline:
             lift.fill((self.brightness_boost, self.brightness_boost, self.brightness_boost, 0))
             self.fx.blit(lift, (0,0), special_flags=pygame.BLEND_ADD)
 
-        self.frame += 1
         return self.fx
 
 crt = CRTPipeline((WIDTH, HEIGHT), palette="green")
 
 def present():
     final = crt.compose(screen)
-    # We already drew into `screen`; `compose` built `final` on top of that snapshot.
     screen.blit(final, (0,0))
     pygame.display.flip()
 
@@ -146,36 +133,44 @@ def wait_for_enter_release():
                 released = True
         clock.tick(60)
 
-# ====== Time-based typing helpers ======
-def _pump_basic_events():
-    for event in pygame.event.get():
-        if event.type == pygame.QUIT:
-            pygame.quit(); sys.exit()
-
-def type_out_line(line, drawn_lines, x, base_y, line_spacing, draw_face_style="smile", glitch=False):
-    """Time-based typewriter so speed is consistent even if FPS dips."""
+# ====== Letter-by-letter typing helper (glow stays ON) ======
+def type_out_line_letterwise(line, drawn_lines, x, base_y, line_spacing, draw_face_style="smile", glitch=False):
+    """
+    Emits EXACTLY one character per timer tick based on TYPE_CHAR_MS.
+    Glow stays enabled for your CRT look.
+    """
     target = (line or "").lower()
     shown = 0
-    accum = 0.0
+    timer_ms = 0.0
+
     while shown < len(target):
         dt = clock.tick(60) / 1000.0
-        accum += TYPE_CPS * dt
-        add = int(accum)
-        if add > 0:
-            shown = min(len(target), shown + add)
-            accum -= add
+        timer_ms += dt * 1000.0
 
-        _pump_basic_events()
+        # Only reveal ONE character when timer reaches threshold
+        if timer_ms >= TYPE_CHAR_MS:
+            # handle long frames by stepping only one char (keeps the 'typed' look)
+            timer_ms -= TYPE_CHAR_MS
+            shown += 1
+
+        # events + draw
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit(); sys.exit()
+
         screen.fill(BG)
         if draw_face_style:
             draw_face(draw_face_style, glitch=glitch)
-        # draw previous full lines
+
+        # previous full lines
         for i, ln in enumerate(drawn_lines):
             s = font.render(ln, True, TEXT)
             screen.blit(s, (x, base_y + i*line_spacing))
-        # draw current partial
+
+        # current partial
         s = font.render(target[:shown], True, TEXT)
         screen.blit(s, (x, base_y + len(drawn_lines)*line_spacing))
+
         present()
 
     soft_wait(LINE_PAUSE_MS)
@@ -327,10 +322,9 @@ def init_screen():
     base_y = 120
     line_spacing = 36
 
-    # time-based typing for each line
     typed = []
     for line in lines:
-        type_out_line(line, typed, x, base_y, line_spacing, draw_face_style=None)
+        type_out_line_letterwise(line, typed, x, base_y, line_spacing, draw_face_style=None)
         typed.append(line.lower())
 
     # blink & wait for ENTER
@@ -405,10 +399,10 @@ def show_text_block(text, face_style="smile", glitch=False):
     if not lines:
         lines = [""]
 
-    # time-based typewriter for each line
     typed = []
     for line in lines:
-        type_out_line(line, typed, x, base_y, line_spacing, draw_face_style=face_style, glitch=glitch)
+        type_out_line_letterwise(line, typed, x, base_y, line_spacing,
+                                 draw_face_style=face_style, glitch=glitch)
         typed.append(line)
 
     # wait for ENTER with blinking cursor only
