@@ -4,6 +4,9 @@ import time
 import os
 import random
 
+# ====== Audio mixer (must be before pygame.init) ======
+pygame.mixer.pre_init(frequency=44100, size=-16, channels=2, buffer=1024)
+
 # ====== Pygame setup ======
 pygame.init()
 
@@ -18,6 +21,18 @@ ASSETS_DIR = os.path.join(os.path.dirname(__file__), "assets")
 FONT_PATH = os.path.join(ASSETS_DIR, "Px437_IBM_DOS_ISO8.ttf")
 FONT_SIZE = 26
 font = pygame.font.Font(FONT_PATH, FONT_SIZE)
+
+# ---- Title music paths ----
+MUSIC_DIR   = os.path.join(ASSETS_DIR, "music")
+TITLE_MUSIC = os.path.join(MUSIC_DIR, "The Miracles - Love Machine.mp3")
+
+# ---- Init mixer & load music once ----
+pygame.mixer.init()  # uses the pre_init settings above
+try:
+    pygame.mixer.music.load(TITLE_MUSIC)
+except Exception as e:
+    print(f"[WARN] Could not load music at {TITLE_MUSIC}: {e}")
+title_music_started = False  # track whether the title loop has begun
 
 # Colors
 TEXT = (0, 255, 0)   # bright green
@@ -192,7 +207,20 @@ def wrap_text_to_width(text, max_width):
     return lines
 
 def wait_for_enter(message="press enter to begin.", show_face=False):
+    global title_music_started  # <<< music control
     message = (message or "").lower()
+
+    # ---- Start looping title music with fade-up (only once) ----
+    if not title_music_started:
+        try:
+            pygame.mixer.music.play(loops=-1, fade_ms=2500)  # fade in ~2.5s
+            pygame.mixer.music.set_volume(1.0)               # 0.0–1.0
+            title_music_started = True
+        except Exception as e:
+            if not hasattr(wait_for_enter, "_warned"):
+                print(f"[WARN] Could not start music: {e}")
+                wait_for_enter._warned = True
+
     blink = True
     last = pygame.time.get_ticks()
     while True:
@@ -214,6 +242,12 @@ def wait_for_enter(message="press enter to begin.", show_face=False):
             if event.type == pygame.QUIT:
                 pygame.quit(); sys.exit()
             if event.type == pygame.KEYDOWN and event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                # ---- Fade down on ENTER ----
+                try:
+                    pygame.mixer.music.fadeout(1200)  # ~1.2s fade
+                except Exception:
+                    pass
+                title_music_started = False
                 return
 
         if pygame.time.get_ticks() - last > BLINK_INTERVAL_MS:
