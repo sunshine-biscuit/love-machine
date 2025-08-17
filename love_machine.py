@@ -42,6 +42,16 @@ BG   = (0, 2, 0)     # dark, almost black
 TYPE_CHAR_MS   = 22   # ms per character (≈45 cps). Try 18–28 to taste.
 LINE_PAUSE_MS  = 90   # pause after a full line
 BLINK_INTERVAL_MS = 450
+# Ellipsis timing tweaks
+ELLIPSIS_CHAR_MS = TYPE_CHAR_MS * 3     # base speed for dots
+ELLIPSIS_RAMP = 0.45                    # each next dot is 45% slower than the previous
+ELLIPSIS_DOT_PAUSE_MS = 120             # extra pause after each dot (will ramp too)
+ELLIPSIS_AFTER_PAUSE_MS = 350           # extra pause after finishing the whole run of dots
+
+
+
+# ====== Title fade timing ======
+TITLE_FADE_MS = 3000   # fade length for music + screen (ms). Bump to 3500–4000 for extra drama.
 
 # ====== Pi speed config (visual effects) ======
 CRT_ENABLE_GLOW       = True     # keep glow ON during typing
@@ -154,7 +164,7 @@ def type_out_line_letterwise(line, drawn_lines, x, base_y, line_spacing, draw_fa
     Emits EXACTLY one character per timer tick based on TYPE_CHAR_MS.
     Glow stays enabled for your CRT look.
     """
-    target = (line or "").lower()
+    target = (line or "")   # <-- keep case (so CAPS survive)
     shown = 0
     timer_ms = 0.0
 
@@ -164,7 +174,6 @@ def type_out_line_letterwise(line, drawn_lines, x, base_y, line_spacing, draw_fa
 
         # Only reveal ONE character when timer reaches threshold
         if timer_ms >= TYPE_CHAR_MS:
-            # handle long frames by stepping only one char (keeps the 'typed' look)
             timer_ms -= TYPE_CHAR_MS
             shown += 1
 
@@ -190,6 +199,106 @@ def type_out_line_letterwise(line, drawn_lines, x, base_y, line_spacing, draw_fa
 
     soft_wait(LINE_PAUSE_MS)
 
+def type_out_line_letterwise_thoughtful(line, drawn_lines, x, base_y, line_spacing, draw_face_style="smile", glitch=False):
+    """
+    Types a line letter-by-letter, slowing and pausing on ellipses (`...`).
+    Each successive dot in the same run takes longer than the previous one.
+    Keeps ORIGINAL casing.
+    """
+    target = (line or "")
+    shown = 0
+    timer_ms = 0.0
+
+    # pending pauses applied after we draw the current frame
+    ellipsis_pause_ms = 0
+    ellipsis_after_run = False
+
+    while shown < len(target):
+        # Determine per-char threshold
+        if target[shown] == '.':
+            # compute the full dot run [j, k)
+            j = shown
+            while j > 0 and target[j-1] == '.':
+                j -= 1
+            k = shown
+            while k < len(target) and target[k] == '.':
+                k += 1
+            run_len = k - j
+            # only treat as ellipsis if 3+ dots
+            if run_len >= 3:
+                # position within the run for the dot we are ABOUT to reveal (0-based)
+                pos_in_run = shown - j
+                per_char_ms = int(ELLIPSIS_CHAR_MS * (1.0 + ELLIPSIS_RAMP * pos_in_run))
+            else:
+                per_char_ms = TYPE_CHAR_MS
+        else:
+            per_char_ms = TYPE_CHAR_MS
+
+        dt = clock.tick(60) / 1000.0
+        timer_ms += dt * 1000.0
+        just_revealed_char = None
+
+        if timer_ms >= per_char_ms:
+            timer_ms -= per_char_ms
+            # reveal exactly one character
+            just_revealed_char = target[shown]
+            shown += 1
+
+            # If we just revealed a dot, schedule pauses that ramp too
+            if just_revealed_char == '.':
+                # recompute run and position for the char we JUST revealed (index shown-1)
+                idx = shown - 1
+                j = idx
+                while j > 0 and target[j-1] == '.':
+                    j -= 1
+                k = idx + 1
+                while k < len(target) and target[k] == '.':
+                    k += 1
+                run_len = k - j
+                if run_len >= 3:
+                    pos_in_run = idx - j  # 0,1,2,...
+                    ramp = (1.0 + ELLIPSIS_RAMP * pos_in_run)
+                    ellipsis_pause_ms = int(ELLIPSIS_DOT_PAUSE_MS * ramp)
+                    ellipsis_after_run = (idx + 1 == k)  # we just typed the last dot in the run
+                else:
+                    ellipsis_pause_ms = 0
+                    ellipsis_after_run = False
+            else:
+                ellipsis_pause_ms = 0
+                ellipsis_after_run = False
+
+        # events + draw
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit(); sys.exit()
+
+        screen.fill(BG)
+        if draw_face_style:
+            draw_face(draw_face_style, glitch=glitch)
+
+        # previously completed lines
+        for i, ln in enumerate(drawn_lines):
+            s = font.render(ln, True, TEXT)
+            screen.blit(s, (x, base_y + i * line_spacing))
+
+        # current partial
+        s = font.render(target[:shown], True, TEXT)
+        screen.blit(s, (x, base_y + len(drawn_lines) * line_spacing))
+
+        present()
+
+        # Apply the scheduled pauses after drawing this frame
+        if ellipsis_pause_ms:
+            soft_wait(ellipsis_pause_ms)
+            ellipsis_pause_ms = 0
+        if ellipsis_after_run:
+            soft_wait(ELLIPSIS_AFTER_PAUSE_MS)
+            ellipsis_after_run = False
+
+    soft_wait(LINE_PAUSE_MS)
+
+
+
 # ====== Text utils ======
 def wrap_text_to_width(text, max_width):
     words = text.split(" ")
@@ -207,7 +316,7 @@ def wrap_text_to_width(text, max_width):
     return lines
 
 def wait_for_enter(message="press enter to begin.", show_face=False):
-    global title_music_started  # <<< music control
+    global title_music_started  # music control
     message = (message or "").lower()
 
     # ---- Start looping title music with fade-up (only once) ----
@@ -242,11 +351,12 @@ def wait_for_enter(message="press enter to begin.", show_face=False):
             if event.type == pygame.QUIT:
                 pygame.quit(); sys.exit()
             if event.type == pygame.KEYDOWN and event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
-                # ---- Fade down on ENTER ----
+                # Fade music + screen together, dramatically
                 try:
-                    pygame.mixer.music.fadeout(1200)  # ~1.2s fade
+                    pygame.mixer.music.fadeout(TITLE_FADE_MS)
                 except Exception:
                     pass
+                title_fade_out()            # visual fade matches the same duration
                 title_music_started = False
                 return
 
@@ -341,11 +451,13 @@ def draw_face(style="smile", block=13, glitch=False):
 
 # ====== Screens ======
 def hold_screen():
+    # Title screen with music
     lights_fade_up()
     wait_for_enter("press enter to begin.", show_face=False)
+    # After wait_for_enter returns, we've faded to black and are ready for init.
 
 def init_screen():
-    lights_fade_down()
+    # lights_fade_down()  # already handled during title fade
     lines = [
         "initialising...",
         "booting love machine v1.0...",
@@ -359,7 +471,7 @@ def init_screen():
     typed = []
     for line in lines:
         type_out_line_letterwise(line, typed, x, base_y, line_spacing, draw_face_style=None)
-        typed.append(line.lower())
+        typed.append(line)
 
     # blink & wait for ENTER
     blink = True
@@ -384,17 +496,30 @@ def init_screen():
 
 def input_name_screen():
     name = ""
-    instructions = "what is your name?"
-    blink = True; last = pygame.time.get_ticks()
+    instructions = "what is your name?"  # prompt text
+
+    # ---- TYPE THE PROMPT LETTER-BY-LETTER ----
+    x = 50
+    prompt_base_y = HEIGHT - 240
+    line_spacing = 32
+    prompt_lines = wrap_text_to_width(instructions, WIDTH - 100)
+    typed_prompt = []
+    for ln in prompt_lines:
+        type_out_line_letterwise(ln, typed_prompt, x, prompt_base_y, line_spacing,
+                                 draw_face_style=None)
+        typed_prompt.append(ln)
+
+    # ---- INPUT LOOP (NAME IN ALL CAPS) ----
+    blink = True
+    last = pygame.time.get_ticks()
     while True:
         screen.fill(BG)
-        # prompt
-        prompt_lines = wrap_text_to_width(instructions.lower(), WIDTH - 100)
-        base_y = HEIGHT - 240
-        for i, line in enumerate(prompt_lines):
+        # draw the typed prompt
+        for i, line in enumerate(typed_prompt):
             s = font.render(line, True, TEXT)
-            screen.blit(s, (50, base_y + i*32))
-        # input line (always lowercase)
+            screen.blit(s, (x, prompt_base_y + i*line_spacing))
+
+        # input line (ALL CAPS)
         s = font.render(name, True, TEXT)
         screen.blit(s, (50, HEIGHT - 160))
         if blink:
@@ -406,17 +531,18 @@ def input_name_screen():
                 pygame.quit(); sys.exit()
             if event.type == pygame.KEYDOWN:
                 if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
-                    return (name.strip() or "friend")
+                    return (name.strip() or "FRIEND")  # return ALL CAPS default
                 elif event.key == pygame.K_BACKSPACE:
                     name = name[:-1]
                 elif event.key == pygame.K_ESCAPE:
-                    return "friend"
+                    return "FRIEND"
                 else:
                     ch = event.unicode
                     if ch:
-                        ch = ch.lower()
+                        ch = ch.upper()  # FORCE CAPS
                         if 32 <= ord(ch) <= 126 and len(name) < 20:
                             name += ch
+
         if pygame.time.get_ticks() - last > BLINK_INTERVAL_MS:
             blink = not blink; last = pygame.time.get_ticks()
         clock.tick(60)
@@ -426,9 +552,9 @@ def show_text_block(text, face_style="smile", glitch=False):
     base_y = HEIGHT - 180
     line_spacing = 32
 
-    # lowercase and wrap
+    # keep case: DON'T force .lower() so NAME and TRAIT can be CAPS
     lines = []
-    for para in (text or "").lower().split("\n"):
+    for para in (text or "").split("\n"):
         lines.extend(wrap_text_to_width(para, WIDTH - 100))
     if not lines:
         lines = [""]
@@ -463,27 +589,31 @@ def show_text_block(text, face_style="smile", glitch=False):
         clock.tick(60)
 
 def glitch_face_moment(text):
-    # render text lines for cursor placement (lowercase)
-    lines = wrap_text_to_width((text or "").lower(), WIDTH - 100) if (text or "").strip() else [""]
+    """
+    Types the given text letter-by-letter (like other screens),
+    slowing during '...' sequences. Then waits for ENTER.
+    """
+    # Wrap but KEEP case
+    lines = []
+    for para in (text or "").split("\n"):
+        lines.extend(wrap_text_to_width(para, WIDTH - 100))
+    if not lines:
+        lines = [""]
+
     x = 50
     base_y = HEIGHT - 160
     line_spacing = 32
-    last_line_w = font.size(lines[-1])[0]
 
-    # short animated glitch phase (no prompt)
-    start = pygame.time.get_ticks()
-    duration = 1500
-    while pygame.time.get_ticks() - start < duration:
-        screen.fill(BG); draw_face("smile", glitch=True)
-        for i, line in enumerate(lines):
-            s = font.render(line, True, TEXT)
-            screen.blit(s, (x, base_y + i*line_spacing))
-        present()
-        clock.tick(60)
+    # Type each line thoughtfully
+    typed = []
+    for ln in lines:
+        type_out_line_letterwise_thoughtful(ln, typed, x, base_y, line_spacing, draw_face_style="smile", glitch=False)
+        typed.append(ln)
 
-    # then wait for ENTER with blinking cursor only
+    # Then wait for ENTER with blink (like others)
     blink = True
     last = pygame.time.get_ticks()
+    last_line_w = font.size(typed[-1])[0]
     while True:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
@@ -492,14 +622,11 @@ def glitch_face_moment(text):
                 return
 
         screen.fill(BG); draw_face("smile", glitch=False)
-        for i, line in enumerate(lines):
+        for i, line in enumerate(typed):
             s = font.render(line, True, TEXT)
             screen.blit(s, (x, base_y + i*line_spacing))
         if blink:
-            pygame.draw.rect(
-                screen, TEXT,
-                (x + last_line_w + 6, base_y + (len(lines)-1)*line_spacing + 5, 10, 20)
-            )
+            pygame.draw.rect(screen, TEXT, (x + last_line_w + 6, base_y + (len(typed)-1)*line_spacing + 5, 10, 20))
         present()
 
         if pygame.time.get_ticks() - last > BLINK_INTERVAL_MS:
@@ -508,7 +635,44 @@ def glitch_face_moment(text):
 
         clock.tick(60)
 
+
 # ====== Transitions ======
+def title_fade_out():
+    """Fade the current screen to black over TITLE_FADE_MS and start lights fading down."""
+    lights_fade_down()  # trigger lighting fade now
+
+    # Temporarily turn off glow and brightness boost during fade to avoid any flash
+    prev_glow  = crt.enable_glow
+    prev_boost = crt.brightness_boost
+    crt.enable_glow = False
+    crt.brightness_boost = 0
+
+    overlay = pygame.Surface((WIDTH, HEIGHT))
+    overlay.fill((0, 0, 0))
+
+    start = pygame.time.get_ticks()
+    while True:
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit(); sys.exit()
+
+        elapsed = pygame.time.get_ticks() - start
+        t = min(1.0, elapsed / max(1, TITLE_FADE_MS))   # 0 → 1 over duration
+        overlay.set_alpha(int(255 * t))
+
+        screen.blit(overlay, (0, 0))  # darken last title frame
+        present()
+
+        if t >= 1.0:
+            break
+        clock.tick(60)
+
+    # final clean black, then restore CRT settings
+    screen.fill((0, 0, 0))
+    present()
+    crt.enable_glow = prev_glow
+    crt.brightness_boost = prev_boost
+
 def fade_to_black():
     fade = pygame.Surface((WIDTH, HEIGHT)); fade.fill((0,0,0))
     for a in range(0, 255, 10):
@@ -525,19 +689,18 @@ def main_sequence():
     ]
 
     while True:
-        # Holding screen (lights up)
-        hold_screen()
-        wait_for_enter_release()
+        # Title -> press ENTER -> slow synced fade to black
+        hold_screen()             # returns immediately after fade completes
 
-        # Initialising (lights down later when integrating)
+        # Automatically start init NOW (no extra press here)
         init_screen()
-        wait_for_enter_release()
+        wait_for_enter_release()  # user presses ENTER at end of init; this just waits for key-up
 
         # Ask name
-        name = input_name_screen()
-        trait = random.choice(traits)
+        name = input_name_screen()          # returns ALL CAPS
+        trait = random.choice(traits).upper()  # TRAIT in ALL CAPS
 
-        # Conversational sequence
+        # Conversational sequence (NAME + TRAIT stay CAPS now)
         show_text_block(f"hello, {name}", face_style="smile"); wait_for_enter_release()
         show_text_block(f"it's a nice name... {trait}", face_style="smile"); wait_for_enter_release()
         show_text_block("i am called love machine", face_style="smile"); wait_for_enter_release()
@@ -551,12 +714,12 @@ def main_sequence():
         # desk_lamp_up()  # later when GPIO added
         show_text_block("i want you to respond to the following question. you can write, draw or whatever suits you best.", face_style="smile"); wait_for_enter_release()
         show_text_block("ready?", face_style="smile"); wait_for_enter_release()
-        show_text_block("what was your first love? what happened? take your time, there is no rush. press enter when you are done."); wait_for_enter_release()
+        show_text_block("What was your first love? What happened?\nTake your time, there is no rush. Press enter when you are done"); wait_for_enter_release()
         show_text_block("all finished? great", face_style="smile"); wait_for_enter_release()
         show_text_block("now feed the paper, face up into the slot on your left and press enter.", face_style="smile"); wait_for_enter_release()
 
         # Processing + glitch
-        glitch_face_moment("... oh.... that is.... very moving.. i had no idea..")
+        glitch_face_moment("... oh... that is... very moving... i had no idea...")
         wait_for_enter_release()
 
         show_text_block("thank you for sharing that with me. i have processed this and have something for you... a gift.", face_style="smile"); wait_for_enter_release()
@@ -570,7 +733,7 @@ def main_sequence():
         # Fade / reset
         fade_to_black()
         lights_fade_up()
-        # loop back to holding screen
+        # loop back to title
 
 if __name__ == "__main__":
     try:
