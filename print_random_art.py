@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 # Generative art -> preview -> Epson TM-T88 over TCP:9100 (ESC/POS raster)
 # Includes: halftone / radial burst / maze, safe levels, side+top/bottom trimming,
-# light edge softener (no dark rings), reduced multiply, and adaptive chunked send.
+# light edge softener (no dark rings), adaptive chunked send, and
+# weighted variant selection + frequent multi-style layering.
 
 import os, socket, uuid, math, time, random
 from datetime import datetime
@@ -17,6 +18,37 @@ PRINTER_PORT = 9100
 PRINTER_DOTS = 512                 # safe width; try 576 later if supported
 PREVIEW_PNG  = "last-art-preview.png"
 LOG_FILE     = "printed-art-ids.txt"
+
+# ---- Height guards (override via env if you like) ----
+MIN_BASE_HEIGHT   = int(os.getenv("LM_MIN_BASE_HEIGHT", "900"))   # before dither/trim
+MIN_FINAL_ROWS    = int(os.getenv("LM_MIN_FINAL_ROWS", "900"))    # after dither/trim
+
+
+# ====== VARIANT WEIGHTING ======
+VARIANTS = ["noise","lines","shapes","strokes","plasma","life","halftone","burst","maze"]
+
+# Heavier base weight for PLASMA (you can tweak these later)
+WEIGHTS_BASE = {
+    "plasma": 0.36,
+    "lines": 0.10, "shapes": 0.10, "strokes": 0.10, "noise": 0.10,
+    "life": 0.10, "halftone": 0.06, "burst": 0.05, "maze": 0.03,
+}
+
+# When adding extra layers, still favor plasma a bit, but keep variety
+WEIGHTS_ALT = {
+    "plasma": 0.28,
+    "lines": 0.14, "shapes": 0.14, "strokes": 0.12, "noise": 0.10,
+    "life": 0.08, "halftone": 0.07, "burst": 0.05, "maze": 0.02,
+}
+
+def weighted_pick(rng, items, weights):
+    w = np.array([weights.get(i, 1.0) for i in items], dtype=np.float64)
+    w_sum = w.sum()
+    if w_sum <= 0:
+        return random.choice(items)
+    p = w / w_sum
+    idx = int(rng.choice(len(items), p=p))
+    return items[idx]
 
 # ====== UTIL ======
 def new_run_seed():
@@ -86,48 +118,65 @@ def gen_strokes(seed, w, h):
 
 def gen_plasma(seed, w, h):
     """
-    Fast fBM-style plasma: sum a few upscaled noise octaves.
-    Much faster than diamond-square and looks very similar after blur.
+    Cloud‑like fBM: sums a few *very smooth* low‑frequency noise octaves.
+    Uses tiny random grids upscaled with bicubic interpolation (value‑noise style),
+    so features are big and fluffy instead of speckly/static.
     """
     rng = np.random.default_rng(seed)
 
-    # Choose a small base grid so it's cheap, then upscale
-    # Tall receipt → bias base to ~1/4 width and ~1/6 height
-    base_w = max(32, w // rng.integers(6, 9))
-    base_h = max(32, h // rng.integers(8, 12))
+    # Render a bit oversized, then downsample for extra smoothness
+    upscale = 1.35
+    W, H = int(w * upscale), int(h * upscale)
 
-    # Number of octaves and persistence (how quickly amplitude drops)
-    octaves = int(rng.integers(3, 5))
-    persistence = float(rng.uniform(0.45, 0.62))
+    def smooth_rand_grid(width, height, cells_x, cells_y):
+        """Make a small random grid and bicubic-upscale to (width,height)."""
+        grid = (rng.random((cells_y, cells_x)) * 255).astype(np.uint8)
+        img_small = Image.fromarray(grid, mode="L")
+        # Bicubic gives nice smooth interpolation with gentle roll-off
+        return img_small.resize((width, height), Image.BICUBIC)
 
-    # Start from zeros, add octaves
-    acc = np.zeros((base_h, base_w), dtype=np.float32)
+    # --- octave setup: bigger cells (low frequency) → smaller cells (higher frequency)
+    # Start with large features; lacunarity ~ 1.9 keeps it cloud-like
+    # Tune here if you want even puffier clouds (decrease cells_* or octaves).
+    base_cells_x = max(6, int(W / rng.uniform(180, 260)))
+    base_cells_y = max(6, int(H / rng.uniform(180, 260)))
+    octaves      = int(rng.integers(4, 6))         # 4–5 octaves is plenty for clouds
+    lacunarity   = float(rng.uniform(1.8, 2.1))     # how quickly detail increases
+    persistence  = float(rng.uniform(0.50, 0.62))   # amplitude drop per octave
+
+    acc = np.zeros((H, W), dtype=np.float32)
     amp = 1.0
-    total_amp = 0.0
+    cells_x, cells_y = base_cells_x, base_cells_y
 
-    for i in range(octaves):
-        # fresh white noise each octave
-        noise = rng.random((base_h, base_w)).astype(np.float32) * 2.0 - 1.0  # -1..1
-        acc += noise * amp
-        total_amp += amp
+    for _ in range(octaves):
+        layer = np.asarray(smooth_rand_grid(W, H, cells_x, cells_y), dtype=np.float32) / 255.0
+        # optional gentle blur per octave to avoid banding from tiny grids
+        if cells_x < 10 or cells_y < 10:
+            layer = np.asarray(Image.fromarray((layer * 255).astype(np.uint8), "L")
+                               .filter(ImageFilter.GaussianBlur(radius=0.4)), dtype=np.uint8) / 255.0
+        acc += layer * amp
         amp *= persistence
+        cells_x = min(max(6, int(cells_x * lacunarity)), max(32, W // 24))
+        cells_y = min(max(6, int(cells_y * lacunarity)), max(32, H // 24))
 
-        # upsample base grid size for the next octave (keeps it cheap)
-        if i < octaves - 1:
-            base_w = min(max(32, int(base_w * 1.6)), max(64, w // 2))
-            base_h = min(max(32, int(base_h * 1.6)), max(64, h // 2))
-            # resize current accumulation to the new base size to match shapes
-            acc = Image.fromarray(((acc / max(1e-6, total_amp)) * 127.5 + 127.5).astype(np.uint8), mode="L")
-            acc = acc.resize((base_w, base_h), Image.BILINEAR)
-            acc = (np.asarray(acc).astype(np.float32) - 127.5) / 127.5  # back to -1..1 range
-            total_amp = 1.0  # we've re-normalised into acc; treat as 1.0
+    # Normalize to 0..1
+    mn, mx = float(acc.min()), float(acc.max())
+    field = (acc - mn) / (mx - mn + 1e-9)
 
-    # Normalise -1..1 → 0..255, then resize to target
-    arr = ((acc - acc.min()) / (acc.max() - acc.min() + 1e-9) * 255.0).astype(np.uint8)
-    img = Image.fromarray(arr, mode="L").resize((w, h), Image.BILINEAR)
+    # Tone curve for clouds: brighten mids, keep soft contrast
+    # (Think "gamma 0.85" into a gentle S-curve)
+    field = np.clip(field, 0.0, 1.0) ** 0.85
+    field = 0.6 * field + 0.4 * (field * (1.0 - field) * 4.0)  # mild S-curve
 
-    # A little blur to soften pixel structure
-    return img.filter(ImageFilter.GaussianBlur(radius=float(rng.uniform(0.5, 1.2))))
+    # Map to 0..255 and add tiny blur to remove any residual stepping
+    cloud = (field * 255.0).astype(np.uint8)
+    img = Image.fromarray(cloud, mode="L")
+    img = img.filter(ImageFilter.GaussianBlur(radius=float(rng.uniform(0.3, 0.7))))
+
+    # Downsample to target with LANCZOS (keeps the puffiness)
+    return img.resize((w, h), Image.LANCZOS)
+
+
 
 def gen_life(seed, w, h):
     """Conway's Game of Life evolved from noise, then rendered."""
@@ -269,16 +318,18 @@ def blend_layers(a, b, mode, opacity):
 def generate_image(variant, seed, target_width):
     """
     Returns an 8-bit grayscale PIL Image (not yet dithered).
-    Supports: noise, lines, shapes, strokes, plasma, life, halftone, burst, maze.
-    45% chance to layer two textures. Reduced multiply usage/opacity.
+    Uses weighted picking (plasma favored) and frequent multi-layering.
     """
     rng = np.random.default_rng(seed)
-    base_h = int(target_width * rng.uniform(1.6, 2.1))
+        # base height now respects a minimum
+    base_h = max(MIN_BASE_HEIGHT, int(target_width * rng.uniform(1.7, 2.3)))
     base_w = target_width
 
-    VARIANTS = ["noise","lines","shapes","strokes","plasma","life","halftone","burst","maze"]
-    if variant not in VARIANTS:
-        variant = random.choice(VARIANTS)
+    # ---- base layer: favor plasma via weights ----
+    if variant in VARIANTS:
+        use_variant = variant
+    else:
+        use_variant = weighted_pick(rng, VARIANTS, WEIGHTS_BASE)
 
     def make_layer(v, s):
         if v == "noise":     return gen_noise(s, base_w, base_h)
@@ -291,25 +342,39 @@ def generate_image(variant, seed, target_width):
         if v == "burst":     return gen_radial_burst(int(s), base_w, base_h)
         if v == "maze":      return gen_maze(int(s), base_w, base_h)
 
-    img = make_layer(variant, seed)
+    img = make_layer(use_variant, seed)
     img = random_flip_rotate(img, rng)
 
-    # Layering (multiply a bit more frequent/stronger)
-    if rng.random() < 0.45:
-        alt = random.choice([v for v in VARIANTS if v != variant])
-        img2 = make_layer(alt, (seed + 1337) & 0xFFFFFFFF)
-        img2 = random_flip_rotate(img2, rng)
-        blend_pick = rng.random()
-        if blend_pick < 0.22:  # was 0.15
-            mode = "multiply"
-            opacity = float(rng.uniform(0.33, 0.55))  # was 0.25–0.45
-        elif blend_pick < 0.65:
-            mode = "screen"
-            opacity = float(rng.uniform(0.4, 0.8))
-        else:
-            mode = "add"
-            opacity = float(rng.uniform(0.35, 0.7))
-        img = blend_layers(img, img2, mode, opacity)
+        # ---- Layering: less frequent, fewer double-layers ----
+    if rng.random() < 0.60:  # was 0.90
+        num_layers = 1 + (1 if rng.random() < 0.25 else 0)  # was 40%
+        for _ in range(num_layers):
+            alt_choices = [v for v in VARIANTS if v != use_variant]
+            # slightly reduce plasma as a *layer* so base can shine
+            alt = weighted_pick(rng, alt_choices, {**WEIGHTS_ALT, "plasma": 0.22})
+            img2 = make_layer(alt, (seed + rng.integers(1000, 9999)) & 0xFFFFFFFF)
+            img2 = random_flip_rotate(img2, rng)
+
+            r = rng.random()
+            if r < 0.22:
+                mode = "multiply"; opacity = float(rng.uniform(0.32, 0.50))  # a touch lighter
+            elif r < 0.70:
+                mode = "screen";   opacity = float(rng.uniform(0.45, 0.80))
+            else:
+                mode = "add";      opacity = float(rng.uniform(0.38, 0.70))
+            img = blend_layers(img, img2, mode, opacity)
+
+
+            # Blend: multiply present but balanced; screen/add more common
+            r = rng.random()
+            if r < 0.25:
+                mode = "multiply"; opacity = float(rng.uniform(0.33, 0.55))
+            elif r < 0.70:
+                mode = "screen";   opacity = float(rng.uniform(0.45, 0.85))
+            else:
+                mode = "add";      opacity = float(rng.uniform(0.40, 0.75))
+
+            img = blend_layers(img, img2, mode, opacity)
 
     # ---- lighter edge softener (no dark edge rings) ----
     if rng.random() < 0.7:
@@ -447,6 +512,15 @@ def prep_for_printer(img_gray, max_width, target_mean=140, margin_px=8, margin_t
         img_1 = img_gray2.convert("1", dither=Image.FLOYDSTEINBERG)
         img_1 = _trim_bands_tb(img_1)
         img_1 = _crop_whitespace_lr(img_1)
+        
+    # ---- enforce minimum final height (pad white at bottom if needed) ----
+    w, h = img_1.size
+    if h < MIN_FINAL_ROWS:
+        pad_h = MIN_FINAL_ROWS - h
+        padded = Image.new("1", (w, h + pad_h), 1)  # white
+        padded.paste(img_1, (0, 0))
+        img_1 = padded
+
 
     return img_1
 
@@ -517,9 +591,10 @@ def send_image_escpos(ip, port, img_1bit, rows_per_chunk=96, base_sleep=0.015, s
 
 # ====== MAIN ======
 def main():
-    variant = random.choice([
-        "noise","lines","shapes","strokes","plasma","life","halftone","burst","maze"
-    ])
+    # Weighted base pick (plasma more common)
+    rng_main = np.random.default_rng()
+    variant = weighted_pick(rng_main, VARIANTS, WEIGHTS_BASE)
+
     run_uuid, seed = new_run_seed()
     print(f"Variant: {variant}  |  run id: {run_uuid}  |  seed: {seed}")
 
