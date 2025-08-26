@@ -21,7 +21,7 @@ clock = pygame.time.Clock()
 # Paths & font
 ASSETS_DIR = os.path.join(os.path.dirname(__file__), "assets")
 FONT_PATH = os.path.join(ASSETS_DIR, "Px437_IBM_DOS_ISO8.ttf")
-FONT_SIZE = 26
+FONT_SIZE = 28
 font = pygame.font.Font(FONT_PATH, FONT_SIZE)
 
 # ---- Title music paths ----
@@ -389,42 +389,122 @@ def hold_screen():
     # After wait_for_enter returns, we've faded to black and are ready for init.
 
 def init_screen():
-    # lights_fade_down()  # already handled during title fade
-    lines = [
-        "initialising...",
-        "booting love machine v1.0...",
-        "calibrating empathy modules...",
-        "system ready."
+    """
+    Terminal-style boot log:
+      - smaller font just for this screen
+      - per-character typing (fast, smooth)
+      - auto-scroll upward
+      - fade-in at start
+      - waits for ENTER only at the end
+    """
+    # ----- Config -----
+    BOOT_FONT_SIZE = 20
+    CHAR_MS        = 8       # ms per character (very fast typing)
+    GAP_MS         = 20      # pause after finishing a line
+    TOP_MARGIN     = 60
+    BOTTOM_MARGIN  = 40
+    LEFT_MARGIN    = 28
+    LINE_GAP       = 4
+
+    boot_font = pygame.font.Font(FONT_PATH, BOOT_FONT_SIZE)
+    line_h    = boot_font.get_linesize() + LINE_GAP
+
+    messages = [
+        "Initialising system v1.0.3",
+        "Loading kernel modules v1.14.2",
+        "Detecting hardware bus v0.7.1",
+        "Mounting /dev/love v0.9.0   [OK]",
+        "Starting empathy-services v2.3.1",
+        "Calibrating affective-heuristics v0.8.7",
+        "Checking secure sockets v1.2.0   [OK]",
+        "Entropy pool seeded v3.2",
+        "Boot sequence complete v1.0   [OK]",
+        "System ready.",
     ]
-    x = 50
-    base_y = 120
-    line_spacing = 36
 
-    typed = []
-    for line in lines:
-        type_out_line_letterwise(line, typed, x, base_y, line_spacing, draw_face_style=None)
-        typed.append(line)
+    view_h = HEIGHT - TOP_MARGIN - BOTTOM_MARGIN
+    log_h = max(view_h, len(messages) * line_h + 40)
+    log_surface = pygame.Surface((WIDTH, log_h)).convert()
+    log_surface.fill(BG)
 
-    # blink & wait for ENTER
+    next_y = 0
+
+    # ---- Fade-in ----
+    overlay = pygame.Surface((WIDTH, HEIGHT))
+    overlay.fill((0, 0, 0))
+    for alpha in range(255, -1, -30):
+        screen.fill(BG)
+        overlay.set_alpha(alpha)
+        screen.blit(overlay, (0, 0))
+        present()
+        soft_wait(15)
+
+    # ---- Type each message char by char ----
+    for msg in messages:
+        partial = ""
+        char_timer = 0.0
+        while len(partial) < len(msg):
+            dt = clock.tick(60) / 1000.0
+            char_timer += dt * 1000.0
+
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    pygame.quit(); sys.exit()
+
+            if char_timer >= CHAR_MS:
+                char_timer -= CHAR_MS
+                partial += msg[len(partial)]
+
+                # redraw committed log
+                log_surface.fill(BG, (0, next_y, WIDTH, line_h))  # clear this line area
+                s = boot_font.render(partial, True, TEXT)
+                log_surface.blit(s, (LEFT_MARGIN, next_y))
+
+                # scroll view to bottom
+                bottom_needed = next_y + line_h
+                scroll = max(0, bottom_needed - view_h)
+                screen.fill(BG)
+                screen.blit(log_surface, (0, TOP_MARGIN),
+                            area=pygame.Rect(0, scroll, WIDTH, view_h))
+                present()
+
+        # commit line (already there), then move down
+        next_y += line_h
+        soft_wait(GAP_MS)
+
+    # ---- Final: blinking cursor ----
+    last_text = messages[-1]
+    last_w = boot_font.size(last_text)[0]
+    cursor_x = LEFT_MARGIN + last_w + 6
+    cursor_y_log = next_y - line_h + 4
+
     blink = True
-    last = pygame.time.get_ticks()
-    last_line_w = font.size(typed[-1])[0]
+    last_tick = pygame.time.get_ticks()
+
     while True:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 pygame.quit(); sys.exit()
             if event.type == pygame.KEYDOWN and event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
                 return
+
+        bottom_needed = next_y
+        scroll = max(0, bottom_needed - view_h)
         screen.fill(BG)
-        for i in range(len(typed)):
-            s = font.render(typed[i], True, TEXT)
-            screen.blit(s, (x, base_y + i*line_spacing))
+        screen.blit(log_surface, (0, TOP_MARGIN),
+                    area=pygame.Rect(0, scroll, WIDTH, view_h))
+
         if blink:
-            pygame.draw.rect(screen, TEXT, (x + last_line_w + 6, base_y + (len(typed)-1)*line_spacing + 5, 10, 20))
+            cy = cursor_y_log - scroll + TOP_MARGIN
+            pygame.draw.rect(screen, TEXT, (cursor_x, cy, 10, 18))
+
         present()
-        if pygame.time.get_ticks() - last > BLINK_INTERVAL_MS:
-            blink = not blink; last = pygame.time.get_ticks()
+        if pygame.time.get_ticks() - last_tick > BLINK_INTERVAL_MS:
+            blink = not blink
+            last_tick = pygame.time.get_ticks()
         clock.tick(60)
+
+
 
 def input_name_screen():
     name = ""
