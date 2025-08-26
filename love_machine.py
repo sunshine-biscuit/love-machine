@@ -3,6 +3,7 @@ import sys
 import time
 import os
 import random
+import subprocess
 from crt_effects import CRTEffects
 
 
@@ -50,21 +51,16 @@ ELLIPSIS_RAMP = 0.45                    # each next dot is 45% slower than the p
 ELLIPSIS_DOT_PAUSE_MS = 120             # extra pause after each dot (will ramp too)
 ELLIPSIS_AFTER_PAUSE_MS = 350           # extra pause after finishing the whole run of dots
 
-
-
 # ====== Title fade timing ======
 TITLE_FADE_MS = 3000   # fade length for music + screen (ms). Bump to 3500–4000 for extra drama.
 
 # ====== CRT visuals ======
 crt = CRTEffects((WIDTH, HEIGHT), enable_flicker=False)
 
-
-
 def present():
     # Apply the new CRT polish and flip
     crt.apply(screen, 0.0)   # dt not required; effect uses get_ticks() internally
     pygame.display.flip()
-
 
 # ====== Lighting hooks ======
 def lights_fade_up(): pass
@@ -229,8 +225,6 @@ def type_out_line_letterwise_thoughtful(line, drawn_lines, x, base_y, line_spaci
 
     soft_wait(LINE_PAUSE_MS)
 
-
-
 # ====== Text utils ======
 def wrap_text_to_width(text, max_width):
     words = text.split(" ")
@@ -381,12 +375,39 @@ def draw_face(style="smile", block=13, glitch=False):
                     (x0 + c * block + dx, y0 + r * block + dy, block, block)
                 )
 
+# ====== Minimal blank print screen ======
+def show_mostly_blank_status(message="generating your first love..."):
+    """
+    Clears to (almost) blank. Small status at bottom-left so it doesn't feel frozen.
+    """
+    screen.fill(BG)
+    # ultra-subtle status line (keep it low)
+    status = message or ""
+    if status:
+        s = font.render(status, True, TEXT)
+        screen.blit(s, (24, HEIGHT - 40))
+    present()
+
+# ====== External print trigger helper ======
+def run_print_script(participant_name, assigned_trait):
+    """
+    Runs the separate print_random_art.py with CLI arguments so it can print NAME and TRAIT.
+    Blocks until the script finishes (keeps our flow simple).
+    """
+    script_path = os.path.join(os.path.dirname(__file__), "print_random_art.py")
+    try:
+        subprocess.run(
+            ["python3", script_path, "--name", str(participant_name), "--trait", str(assigned_trait)],
+            check=True
+        )
+    except Exception as e:
+        print(f"[ERROR] Print script failed: {e}")
+
 # ====== Screens ======
 def hold_screen():
     # Title screen with music
     lights_fade_up()
     wait_for_enter("press enter to begin.", show_face=False)
-    # After wait_for_enter returns, we've faded to black and are ready for init.
 
 def init_screen():
     """
@@ -503,8 +524,6 @@ def init_screen():
             blink = not blink
             last_tick = pygame.time.get_ticks()
         clock.tick(60)
-
-
 
 def input_name_screen():
     name = ""
@@ -647,7 +666,6 @@ def glitch_face_moment(text):
 
         clock.tick(60)
 
-
 # ====== Transitions ======
 def title_fade_out():
     """Fade the current screen to black over TITLE_FADE_MS and start lights fading down."""
@@ -677,7 +695,6 @@ def title_fade_out():
 
     screen.fill((0, 0, 0))
     present()
-
 
 def fade_to_black():
     fade = pygame.Surface((WIDTH, HEIGHT)); fade.fill((0,0,0))
@@ -730,6 +747,11 @@ def main_sequence():
 
         show_text_block("thank you for sharing that with me. i have processed this and have something for you... a gift.", face_style="smile"); wait_for_enter_release()
         show_text_block("would you like to see your first love?", face_style="smile"); wait_for_enter_release()
+
+        # ======= PRINT MOMENT: clear to mostly blank, then trigger external script with NAME & TRAIT =======
+        show_mostly_blank_status("generating your first love...")  # minimal, nearly blank screen
+        run_print_script(name, trait)  # passes --name and --trait to print_random_art.py
+
         glitch_face_moment(" ")
         wait_for_enter_release()
 
