@@ -3,8 +3,6 @@ import sys
 import time
 import os
 import random
-from crt_effects import CRTEffects
-
 
 # ====== Audio mixer (must be before pygame.init) ======
 pygame.mixer.pre_init(frequency=44100, size=-16, channels=2, buffer=1024)
@@ -55,16 +53,86 @@ ELLIPSIS_AFTER_PAUSE_MS = 350           # extra pause after finishing the whole 
 # ====== Title fade timing ======
 TITLE_FADE_MS = 3000   # fade length for music + screen (ms). Bump to 3500–4000 for extra drama.
 
-# ====== CRT visuals ======
-crt = CRTEffects((WIDTH, HEIGHT), enable_flicker=False)
+# ====== Pi speed config (visual effects) ======
+CRT_ENABLE_GLOW       = True     # keep glow ON during typing
+CRT_BRIGHTNESS_BOOST  = 12       # small lift to keep text bright
+SCANLINE_ALPHA        = 20       # lighter scanlines for clarity
+VIGNETTE_STRENGTH     = 0.10     # subtle vignette, crisp edges
 
+# ====== CRT pipeline / effects ======
+class CRTPipeline:
+    def __init__(self, size, palette="green"):
+        self.w, self.h = size
+        self.fx = pygame.Surface(size).convert_alpha()
+        # Prebuilt overlays
+        self.scan = self._make_scanlines(alpha=SCANLINE_ALPHA)
+        self.vign = self._make_vignette(strength=VIGNETTE_STRENGTH) if VIGNETTE_STRENGTH > 0 else None
+        self.mask = None
+        self.brightness_boost = CRT_BRIGHTNESS_BOOST
 
+        # Glow toggle (always on per your request)
+        self.enable_glow = CRT_ENABLE_GLOW
+        self.palette = {"green": ((0,255,102), (6,18,8)),
+                        "amber": ((255,176,0), (20,12,6))}.get(palette, ((0,255,102),(6,18,8)))
+
+    def _make_scanlines(self, alpha=36):
+        s = pygame.Surface((self.w, self.h), flags=pygame.SRCALPHA)
+        dark = (0,0,0,alpha)
+        for y in range(0, self.h, 2):
+            s.fill(dark, (0, y, self.w, 1))
+        return s
+
+    def _make_vignette(self, strength=0.24):
+        s = pygame.Surface((self.w, self.h), flags=pygame.SRCALPHA)
+        cx, cy = self.w/2, self.h/2
+        maxd = (cx**2 + cy**2) ** 0.5
+        arr = pygame.PixelArray(s)
+        for y in range(self.h):
+            for x in range(self.w):
+                d = ((x-cx)**2 + (y-cy)**2) ** 0.5 / maxd
+                a = int(255 * (d**1.8) * strength)
+                arr[x, y] = (0<<24) | (0<<16) | (0<<8) | a
+        del arr
+        return s
+
+    def _blur(self, surf, passes=1):
+        # Cheap blur for Pi: downscale/upsample once
+        tmp = surf
+        for _ in range(passes):
+            small = pygame.transform.scale(tmp, (max(1, self.w//2), max(1, self.h//2)))
+            tmp = pygame.transform.scale(small, (self.w, self.h))
+        return tmp
+
+    def compose(self, source_surface):
+        self.fx.fill((0,0,0,0))
+        self.fx.blit(source_surface, (0,0))
+
+        # Glow ON (as requested)
+        if self.enable_glow:
+            glow = self._blur(source_surface, passes=1)
+            glow.set_alpha(56)  # 48–64 is a good range
+            self.fx.blit(glow, (0,0), special_flags=pygame.BLEND_ADD)
+
+        # Scanlines + vignette
+        if self.scan:
+            self.fx.blit(self.scan, (0,0))
+        if self.vign:
+            self.fx.blit(self.vign, (0,0))
+
+        # Global brightness boost
+        if self.brightness_boost:
+            lift = pygame.Surface((self.w, self.h), pygame.SRCALPHA)
+            lift.fill((self.brightness_boost, self.brightness_boost, self.brightness_boost, 0))
+            self.fx.blit(lift, (0,0), special_flags=pygame.BLEND_ADD)
+
+        return self.fx
+
+crt = CRTPipeline((WIDTH, HEIGHT), palette="green")
 
 def present():
-    # Apply the new CRT polish and flip
-    crt.apply(screen, 0.0)   # dt not required; effect uses get_ticks() internally
+    final = crt.compose(screen)
+    screen.blit(final, (0,0))
     pygame.display.flip()
-
 
 # ====== Lighting hooks ======
 def lights_fade_up(): pass
@@ -573,6 +641,12 @@ def title_fade_out():
     """Fade the current screen to black over TITLE_FADE_MS and start lights fading down."""
     lights_fade_down()  # trigger lighting fade now
 
+    # Temporarily turn off glow and brightness boost during fade to avoid any flash
+    prev_glow  = crt.enable_glow
+    prev_boost = crt.brightness_boost
+    crt.enable_glow = False
+    crt.brightness_boost = 0
+
     overlay = pygame.Surface((WIDTH, HEIGHT))
     overlay.fill((0, 0, 0))
 
@@ -586,18 +660,18 @@ def title_fade_out():
         t = min(1.0, elapsed / max(1, TITLE_FADE_MS))   # 0 → 1 over duration
         overlay.set_alpha(int(255 * t))
 
-        # draw last frame, then darken with overlay, then CRT polish, then flip
-        # (your loops already drew the last title frame before calling this)
-        screen.blit(overlay, (0, 0))
+        screen.blit(overlay, (0, 0))  # darken last title frame
         present()
 
         if t >= 1.0:
             break
         clock.tick(60)
 
+    # final clean black, then restore CRT settings
     screen.fill((0, 0, 0))
     present()
-
+    crt.enable_glow = prev_glow
+    crt.brightness_boost = prev_boost
 
 def fade_to_black():
     fade = pygame.Surface((WIDTH, HEIGHT)); fade.fill((0,0,0))
