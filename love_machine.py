@@ -1,157 +1,193 @@
+# ====== Imports (order matters for audio) ======
+import os, sys, time, random, subprocess, math, threading
+
+# Force PulseAudio on Pi OS (PipeWire) BEFORE importing pygame
+os.environ.setdefault("SDL_AUDIODRIVER", "pulseaudio")
+
 import pygame
-import sys
-import time
-import os
-import random
-import subprocess
-import math
-import threading
 from crt_effects import CRTEffects
 
-# ====== Audio mixer (must be before pygame.init) ======
-pygame.mixer.pre_init(frequency=44100, size=-16, channels=2, buffer=1024)
+# Pi pin setup before pygame init
+subprocess.run(["sudo","/usr/local/bin/pinctrl","set","12","a0"], check=False)
 
-# ====== Pygame setup ======
-pygame.init()
+from pwm_helper import init_pwm, set_brightness
+init_pwm()                   # start hardware PWM
+set_brightness(0.22)         # force ambient immediately (0.22 = 22%)
 
-# Screen
+from quiz_data import QUESTIONS, CATEGORY_BLURBS
+
+
+# ====== Audio: robust initialisation ======
+def _init_audio(retries=5, delay=0.4):
+    # pre_init must be before pygame.init()
+    pygame.mixer.pre_init(frequency=44100, size=-16, channels=2, buffer=1024)
+    pygame.init()
+    last = None
+    for _ in range(retries):
+        try:
+            pygame.mixer.init()
+            return True
+        except Exception as e:
+            last = e
+            time.sleep(delay)
+    print(f"[WARN] pygame.mixer.init failed: {last}")
+    return False
+
+_init_audio()
+
+
+# ====== Screen ======
 WIDTH, HEIGHT = 800, 480
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
 pygame.display.set_caption("Love Machine")
 clock = pygame.time.Clock()
 
-# Paths & font
+# ====== Paths & font ======
 ASSETS_DIR = os.path.join(os.path.dirname(__file__), "assets")
-FONT_PATH = os.path.join(ASSETS_DIR, "Px437_IBM_DOS_ISO8.ttf")
-FONT_SIZE = 28
+FONT_PATH  = os.path.join(ASSETS_DIR, "Px437_IBM_DOS_ISO8.ttf")
+FONT_SIZE  = 28
 font = pygame.font.Font(FONT_PATH, FONT_SIZE)
 
-# ---- Title music paths ----
-MUSIC_DIR   = os.path.join(ASSETS_DIR, "music")
-TITLE_MUSIC = os.path.join(MUSIC_DIR, "Wham! - Love Machine.mp3")
+# ====== Music (Title track: Foreigner) ======
+MUSIC_DIR = os.path.join(ASSETS_DIR, "music")
+_AUDIO_EXTS = (".wav", ".ogg", ".mp3", ".flac")
 
-# ---- Init mixer & load music once ----
-pygame.mixer.init()  # uses the pre_init settings above
-try:
-    pygame.mixer.music.load(TITLE_MUSIC)
-except Exception as e:
-    print(f"[WARN] Could not load music at {TITLE_MUSIC}: {e}")
-title_music_started = False  # track whether the title loop has begun
+# Put YOUR converted filename(s) here, in priority order.
+# If you created only one, keep just that line.
+_TITLE_CANDIDATES = [
+    "Foreigner - know what love is.ogg",          # <-- converted OGG (recommended)
+    "Foreigner - know what love is (PCM).wav",    # <-- if you made a PCM WAV
+    "Foreigner - know what love is.wav",          # <-- original (kept as last fallback)
+]
 
-# Colors
+def _find_title_track():
+    # 1) exact filenames (in the order above)
+    for name in _TITLE_CANDIDATES:
+        p = os.path.join(MUSIC_DIR, name)
+        if os.path.isfile(p):
+            return p
+    # 2) fuzzy match (case-insensitive) e.g. if you renamed slightly
+    try:
+        for fname in os.listdir(MUSIC_DIR):
+            low = fname.lower()
+            if low.endswith(_AUDIO_EXTS) and ("foreigner" in low) and ("know what love is" in low):
+                return os.path.join(MUSIC_DIR, fname)
+    except FileNotFoundError:
+        pass
+    # 3) any audio file in the folder (last resort)
+    try:
+        for fname in sorted(os.listdir(MUSIC_DIR)):
+            if fname.lower().endswith(_AUDIO_EXTS):
+                return os.path.join(MUSIC_DIR, fname)
+    except FileNotFoundError:
+        pass
+    return None
+
+TITLE_MUSIC = _find_title_track()
+
+def _load_title_music():
+    """Load the Foreigner title track; use OGG/PCM WAV to avoid codec issues."""
+    if not TITLE_MUSIC:
+        print(f"[WARN] No audio file found in {MUSIC_DIR}")
+        return False
+    try:
+        pygame.mixer.music.load(TITLE_MUSIC)
+        print(f"[audio] Loaded: {os.path.basename(TITLE_MUSIC)}")
+        return True
+    except Exception as e:
+        print(f"[ERROR] Could not load {TITLE_MUSIC}: {e}")
+        print("[HINT] Use an OGG or PCM WAV (44.1kHz, 16‑bit) in assets/music/.")
+        return False
+
+_music_ready = _load_title_music()
+title_music_started = False
+
+
+# ====== Colours & typing ======
 TEXT = (0, 255, 0)   # bright green
 BG   = (0, 2, 0)     # dark, almost black
 
-# ====== Typing speed (letter-by-letter) ======
-TYPE_CHAR_MS   = 22   # ms per character (≈45 cps). Try 18–28 to taste.
-LINE_PAUSE_MS  = 90   # pause after a full line
+TYPE_CHAR_MS   = 22
+LINE_PAUSE_MS  = 90
 BLINK_INTERVAL_MS = 450
-# Ellipsis timing tweaks
-ELLIPSIS_CHAR_MS = TYPE_CHAR_MS * 3     # base speed for dots
-ELLIPSIS_RAMP = 0.45                    # each next dot is 45% slower than the previous
-ELLIPSIS_DOT_PAUSE_MS = 120             # extra pause after each dot (will ramp too)
-ELLIPSIS_AFTER_PAUSE_MS = 350           # extra pause after finishing the whole run of dots
+ELLIPSIS_CHAR_MS = TYPE_CHAR_MS * 3
+ELLIPSIS_RAMP = 0.45
+ELLIPSIS_DOT_PAUSE_MS = 120
+ELLIPSIS_AFTER_PAUSE_MS = 350
 
 # ====== Title fade timing ======
-TITLE_FADE_MS = 3000   # fade length for music + screen (ms). Bump to 3500–4000 for extra drama.
+TITLE_FADE_MS = 3000
 
 # ====== CRT visuals ======
 crt = CRTEffects((WIDTH, HEIGHT), enable_flicker=False)
-
 def present():
-    # Apply the new CRT polish and flip
-    crt.apply(screen, 0.0)   # dt not required; effect uses get_ticks() internally
+    crt.apply(screen, 0.0)
     pygame.display.flip()
 
-# ================== LIGHTING (Hardware PWM first, fallback to GPIO) ==================
-# Uses pigpio hardware PWM on GPIO18 when available (no flicker). Falls back to RPi.GPIO PWM if not.
-GPIO_PIN     = 18     # BCM (physical pin 12) -> XC4488 SIG
-PWM_FREQ_HZ  = 1800   # 1500–2000 works well for LED strips
-AMBIENT_LIGHT = 0.22  # 0..1 ambient floor
-SHOW_LIGHT    = 0.90  # 0..1 bright show level
 
-import math, threading, time, subprocess
+# ==== Quiz stats persistence ====
+PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR     = os.path.join(PROJECT_ROOT, "data")
+STATS_PATH   = os.path.join(DATA_DIR, "stats_quiz.json")
 
-# Try pigpio (hardware PWM)
-_pigpio_ok = False
-try:
-    import pigpio
-    _pi = pigpio.pi()  # connect to daemon on default port
-    if not _pi.connected:
-        # Try to start the daemon (works if you can sudo without password; otherwise run sudo pigpiod yourself once)
-        try:
-            subprocess.run(["sudo", "pigpiod"], check=False)
-            time.sleep(0.2)
-            _pi = pigpio.pi()
-        except Exception:
-            pass
-    _pigpio_ok = bool(_pi and _pi.connected)
-except Exception:
-    _pigpio_ok = False
+def _ensure_stats_file():
+    os.makedirs(DATA_DIR, exist_ok=True)
+    if not os.path.exists(STATS_PATH):
+        import json
+        with open(STATS_PATH, "w", encoding="utf-8") as f:
+            json.dump({"total": 0, "categories": {}}, f, indent=2)
 
-# If pigpio still not available, fall back to RPi.GPIO (software PWM)
-if not _pigpio_ok:
-    try:
-        import RPi.GPIO as GPIO
-        _HAS_GPIO = True
-    except Exception as _e:
-        _HAS_GPIO = False
-        print("[WARN] RPi.GPIO not available; lighting disabled. Error:", _e)
+def _load_stats():
+    import json
+    _ensure_stats_file()
+    with open(STATS_PATH, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+def _save_stats(stats):
+    import json
+    with open(STATS_PATH, "w", encoding="utf-8") as f:
+        json.dump(stats, f, indent=2)
+
+def _tally_category_count(chosen_category):
+    """Increment count for `chosen_category` and return (percent_int, counts_dict, total)."""
+    stats = _load_stats()
+    cats = stats.get("categories", {})
+    cats[chosen_category] = cats.get(chosen_category, 0) + 1
+    stats["categories"] = cats
+    stats["total"] = stats.get("total", 0) + 1
+    _save_stats(stats)
+    total = max(stats["total"], 1)
+    pct = round(cats[chosen_category] * 100 / total)
+    return pct, dict(cats), total
+
+
+# ================== LIGHTING (hardware PWM via pwm_helper) ==================
+AMBIENT_LIGHT = 0.22
+SHOW_LIGHT    = 0.90
 
 class LightPWM:
-    """Unified lighting API with hardware PWM (pigpio) preferred, RPi.GPIO fallback."""
-    def __init__(self, pin=GPIO_PIN, freq=PWM_FREQ_HZ, gamma=2.2, ambient=AMBIENT_LIGHT):
-        self.pin    = pin
-        self.freq   = freq
-        self.gamma  = gamma
-        self.level  = ambient
-        self.target = ambient
-        self.duration = 0.2
+    def __init__(self, ambient=AMBIENT_LIGHT):
+        self.level       = ambient
+        self.target      = ambient
+        self.duration    = 0.2
         self.start_time  = time.time()
         self.start_level = ambient
         self._stop = False
         self._lock = threading.Lock()
-        self._mode = "none"
-
-        if _pigpio_ok:
-            self._mode = "pigpio"
-            self._pi = _pi
-            # pigpio hardware PWM uses duty 0..1_000_000
-            self._apply(self.level)
-            self._thread = threading.Thread(target=self._runner, daemon=True)
-            self._thread.start()
-            print("[INFO] Using pigpio hardware PWM on GPIO%d" % self.pin)
-        elif 'GPIO' in globals() and _HAS_GPIO:
-            self._mode = "rpi"
-            GPIO.setmode(GPIO.BCM)
-            GPIO.setwarnings(False)
-            GPIO.setup(self.pin, GPIO.OUT)
-            self._pwm = GPIO.PWM(self.pin, self.freq)
-            self._pwm.start(0)
-            self._apply(self.level)
-            self._thread = threading.Thread(target=self._runner, daemon=True)
-            self._thread.start()
-            print("[INFO] Using RPi.GPIO PWM on GPIO%d" % self.pin)
-        else:
-            print("[WARN] No GPIO PWM available; lights disabled.")
+        set_brightness(self.level)
+        self._thread = threading.Thread(target=self._runner, daemon=True)
+        self._thread.start()
 
     def _apply(self, x: float):
-        x = max(0.0, min(1.0, x))
-        corrected = x ** self.gamma
-        if self._mode == "pigpio":
-            duty = int(corrected * 1_000_000)
-            # pigpio sets frequency and duty together
-            self._pi.hardware_PWM(self.pin, self.freq, duty)
-        elif self._mode == "rpi":
-            duty = corrected * 100.0
-            self._pwm.ChangeDutyCycle(duty)
+        x = 0.0 if x < 0 else (1.0 if x > 1.0 else x)
+        set_brightness(x)
 
     def fade_to(self, level01: float, duration_s: float):
         with self._lock:
             self.start_time  = time.time()
             self.start_level = self.level
-            self.target      = max(0.0, min(1.0, level01))
-            self.duration    = max(0.05, float(duration_s))
+            self.target      = 0.0 if level01 < 0 else (1.0 if level01 > 1.0 else level01)
+            self.duration    = 0.05 if duration_s < 0.05 else float(duration_s)
 
     def fade_up(self, to=SHOW_LIGHT, duration_ms=2500):
         self.fade_to(to, duration_ms / 1000.0)
@@ -163,44 +199,30 @@ class LightPWM:
         while not self._stop:
             time.sleep(0.01)
             with self._lock:
-                t = (time.time() - self.start_time) / self.duration if self.duration > 0 else 1.0
-                t = 0.0 if t < 0 else (1.0 if t > 1.0 else t)
-                eased = 0.5 - 0.5*math.cos(math.pi * t)  # cosine ease
-                self.level = self.start_level + (self.target - self.start_level) * eased
-                cur = self.level
-            self._apply(cur)
+                if self.duration <= 0:
+                    cur = self.target
+                else:
+                    t = (time.time() - self.start_time) / self.duration
+                    t = 0.0 if t < 0 else (1.0 if t > 1.0 else t)
+                    eased = 0.5 - 0.5 * math.cos(math.pi * t)
+                    cur = self.start_level + (self.target - self.start_level) * eased
+                self.level = cur
+            self._apply(self.level)
 
     def stop(self, turn_off=False):
         self._stop = True
-        try:
-            self._thread.join(timeout=1)
-        except:
-            pass
-        if self._mode == "rpi":
-            try:
-                self._apply(0.0 if turn_off else self.level)
-                self._pwm.stop()
-                GPIO.cleanup(self.pin)
-            except: pass
-        elif self._mode == "pigpio":
-            try:
-                self._apply(0.0 if turn_off else self.level)
-                # leave daemon running for next run
-            except: pass
+        try: self._thread.join(timeout=1)
+        except: pass
+        try: self._apply(0.0 if turn_off else self.level)
+        except: pass
 
-# ---- Lighting instance + hooks wired into your flow ----
-_light = LightPWM(pin=GPIO_PIN, freq=PWM_FREQ_HZ, ambient=AMBIENT_LIGHT)
+_light = LightPWM(ambient=AMBIENT_LIGHT)
 
 def lights_fade_up():
-    """Fade lights to SHOW_LIGHT in sync with music fade-in (2.5s by default)."""
     _light.fade_up(to=SHOW_LIGHT, duration_ms=2500)
 
 def lights_fade_down():
-    """Fade lights to ambient in sync with TITLE_FADE_MS music fadeout."""
     _light.fade_down_to_ambient(ambient=AMBIENT_LIGHT, duration_ms=TITLE_FADE_MS)
-
-def desk_lamp_up():  # (placeholder for your separate lamp channel later)
-    pass
 # =======================================================================
 
 
@@ -223,9 +245,10 @@ def wait_for_enter_release():
                 released = True
         clock.tick(60)
 
-# ====== Letter-by-letter typing helper (glow stays ON) ======
+
+# ====== Letter-by-letter typing helpers ======
 def type_out_line_letterwise(line, drawn_lines, x, base_y, line_spacing, draw_face_style="smile", glitch=False):
-    target = (line or "")   # <-- keep case (so CAPS survive)
+    target = (line or "")   # keep case
     shown = 0
     timer_ms = 0.0
 
@@ -336,6 +359,7 @@ def type_out_line_letterwise_thoughtful(line, drawn_lines, x, base_y, line_spaci
 
     soft_wait(LINE_PAUSE_MS)
 
+
 # ====== Text utils ======
 def wrap_text_to_width(text, max_width):
     words = text.split(" ")
@@ -352,6 +376,8 @@ def wrap_text_to_width(text, max_width):
         lines.append(current)
     return lines
 
+
+# ====== Title/hold & boot screens ======
 def wait_for_enter(message="press enter to begin.", show_face=False):
     global title_music_started
     message = (message or "").lower()
@@ -359,14 +385,21 @@ def wait_for_enter(message="press enter to begin.", show_face=False):
     # ---- Start looping title music with fade-up (only once) ----
     if not title_music_started:
         try:
-            # fade music in over 2.5s AND lights up over 2.5s
-            pygame.mixer.music.set_volume(0.0)
-            pygame.mixer.music.play(loops=-1, fade_ms=2500)
-            lights_fade_up()  # 2.5s → matches play(..., fade_ms=2500)
+            if not pygame.mixer.get_init():
+                _init_audio()
+            # If music failed to load at startup (e.g., codec), try again now
+            if not _music_ready:
+                if not _load_title_music():
+                    raise RuntimeError("Startup music not available (see earlier error).")
+
+            pygame.mixer.music.set_volume(0.9)   # set target volume first
+            pygame.mixer.music.play(loops=-1, fade_ms=2500)  # fade from 0 → 0.9
+            lights_fade_up()  # match fade
             title_music_started = True
         except Exception as e:
             if not hasattr(wait_for_enter, "_warned"):
                 print(f"[WARN] Could not start music: {e}")
+                print("[HINT] If this is a codec issue, prefer WAV/OGG inside assets/music/")
                 wait_for_enter._warned = True
 
     blink = True
@@ -405,110 +438,6 @@ def wait_for_enter(message="press enter to begin.", show_face=False):
             last = pygame.time.get_ticks()
         clock.tick(60)
 
-# ====== Face rendering ======
-faces = {
-    "smile": [
-        "0000000000000000",
-        "0000010001000000",
-        "0000010001000000",
-        "0000010001000000",
-        "0000000000000000",
-        "0010000000001000",
-        "0001000000010000",
-        "0000111111110000",
-        "0000000000000000",
-    ],
-    "neutral": [
-        "0000000000000000",
-        "0000010001000000",
-        "0000010001000000",
-        "0000010001000000",
-        "0000000000000000",
-        "0000000000000000",
-        "0000000000000000",
-        "0000111111110000",
-        "0000000000000000",
-    ],
-    "sad": [
-        "0000000000000000",
-        "0000010001000000",
-        "0000010001000000",
-        "0000010001000000",
-        "0000000000000000",
-        "0000111111110000",
-        "0001000000010000",
-        "0010000000001000",
-        "0000000000000000",
-    ],
-    "blink": [
-        "0000000000000000",
-        "0000000000000000",
-        "0000000000000000",
-        "0000000000000000",
-        "0010000000001000",
-        "0001000000010000",
-        "0000111111110000",
-        "0000000000000000",
-        "0000000000000000",
-    ],
-}
-
-blink_on_interval = 5000
-blink_off_duration = 400
-_last_blink = pygame.time.get_ticks()
-_is_blinking = False
-
-def draw_face(style="smile", block=13, glitch=False):
-    import random
-    global _last_blink, _is_blinking
-    t = pygame.time.get_ticks()
-
-    if not _is_blinking and t - _last_blink > blink_on_interval:
-        _is_blinking = True
-        _last_blink = t
-    if _is_blinking and t - _last_blink > blink_off_duration:
-        _is_blinking = False
-        _last_blink = t
-
-    pattern = faces["blink"] if _is_blinking else faces.get(style, faces["smile"])
-
-    face_w = len(pattern[0]) * block
-    x0 = (WIDTH - face_w) // 2
-    y0 = 20
-
-    for r, row in enumerate(pattern):
-        for c, ch in enumerate(row):
-            if ch == '1':
-                dx = dy = 0
-                if glitch and random.random() < 0.02:
-                    dx = random.choice((-1,0,1))
-                    dy = random.choice((-1,0,1))
-                pygame.draw.rect(
-                    screen, TEXT,
-                    (x0 + c * block + dx, y0 + r * block + dy, block, block)
-                )
-
-# ====== Minimal blank print screen ======
-def show_mostly_blank_status(message="generating your first love..."):
-    screen.fill(BG)
-    status = message or ""
-    if status:
-        s = font.render(status, True, TEXT)
-        screen.blit(s, (24, HEIGHT - 40))
-    present()
-
-# ====== External print trigger helper ======
-def run_print_script(participant_name, assigned_trait):
-    script_path = os.path.join(os.path.dirname(__file__), "print_random_art.py")
-    try:
-        subprocess.run(
-            ["python3", script_path, "--name", str(participant_name), "--trait", str(assigned_trait)],
-            check=True
-        )
-    except Exception as e:
-        print(f"[ERROR] Print script failed: {e}")
-
-# ====== Screens ======
 def hold_screen():
     # Title screen with music
     lights_fade_up()
@@ -615,6 +544,8 @@ def init_screen():
             last_tick = pygame.time.get_ticks()
         clock.tick(60)
 
+
+# ====== Input name ======
 def input_name_screen():
     name = ""
     instructions = "what is your name?"
@@ -664,6 +595,8 @@ def input_name_screen():
             blink = not blink; last = pygame.time.get_ticks()
         clock.tick(60)
 
+
+# ====== Text blocks (normal & glitch moment) ======
 def show_text_block(text, face_style="smile", glitch=False):
     x = 50
     base_y = HEIGHT - 180
@@ -743,6 +676,7 @@ def glitch_face_moment(text):
 
         clock.tick(60)
 
+
 # ====== Transitions ======
 def title_fade_out():
     """Fade the current screen to black over TITLE_FADE_MS and start lights fading down."""
@@ -779,16 +713,258 @@ def fade_to_black():
         present()
         pygame.time.delay(15)
 
+
+# ====== Face rendering ======
+faces = {
+    "smile": [
+        "0000000000000000",
+        "0000010001000000",
+        "0000010001000000",
+        "0000010001000000",
+        "0000000000000000",
+        "0010000000001000",
+        "0001000000010000",
+        "0000111111110000",
+        "0000000000000000",
+    ],
+    "neutral": [
+        "0000000000000000",
+        "0000010001000000",
+        "0000010001000000",
+        "0000010001000000",
+        "0000000000000000",
+        "0000000000000000",
+        "0000000000000000",
+        "0000111111110000",
+        "0000000000000000",
+    ],
+    "sad": [
+        "0000000000000000",
+        "0000010001000000",
+        "0000010001000000",
+        "0000010001000000",
+        "0000000000000000",
+        "0000111111110000",
+        "0001000000010000",
+        "0010000000001000",
+        "0000000000000000",
+    ],
+    "blink": [
+        "0000000000000000",
+        "0000000000000000",
+        "0000000000000000",
+        "0000000000000000",
+        "0010000000001000",
+        "0001000000010000",
+        "0000111111110000",
+        "0000000000000000",
+        "0000000000000000",
+    ],
+}
+
+blink_on_interval = 5000
+blink_off_duration = 400
+_last_blink = pygame.time.get_ticks()
+_is_blinking = False
+
+def draw_face(style="smile", block=13, glitch=False):
+    import random
+    global _last_blink, _is_blinking
+    t = pygame.time.get_ticks()
+
+    if not _is_blinking and t - _last_blink > blink_on_interval:
+        _is_blinking = True
+        _last_blink = t
+    if _is_blinking and t - _last_blink > blink_off_duration:
+        _is_blinking = False
+        _last_blink = t
+
+    pattern = faces["blink"] if _is_blinking else faces.get(style, faces["smile"])
+
+    face_w = len(pattern[0]) * block
+    x0 = (WIDTH - face_w) // 2
+    y0 = 20
+
+    for r, row in enumerate(pattern):
+        for c, ch in enumerate(row):
+            if ch == '1':
+                dx = dy = 0
+                if glitch and random.random() < 0.02:
+                    dx = random.choice((-1,0,1))
+                    dy = random.choice((-1,0,1))
+                pygame.draw.rect(
+                    screen, TEXT,
+                    (x0 + c * block + dx, y0 + r * block + dy, block, block)
+                )
+
+
+# ====== Minimal blank print screen ======
+def show_mostly_blank_status(message="generating your first love..."):
+    screen.fill(BG)
+    status = message or ""
+    if status:
+        s = font.render(status, True, TEXT)
+        screen.blit(s, (24, HEIGHT - 40))
+    present()
+
+
+# ====== External print trigger helper ======
+def run_print_script(participant_name, assigned_trait):
+    script_path = os.path.join(os.path.dirname(__file__), "print_random_art.py")
+    try:
+        subprocess.run(
+            ["python3", script_path, "--name", str(participant_name), "--trait", str(assigned_trait)],
+            check=True
+        )
+    except Exception as e:
+        print(f"[ERROR] Print script failed: {e}")
+
+
+# ====== QUIZ (Love Machine-styled) ======
+def run_quiz_lm_style(screen, clock, font, participant_name=None):
+    """
+    Love Machine-styled 3-question quiz with persistent stats.
+    - Face + green theme
+    - Types prompt + all options on the SAME slide
+    - ↑/↓ to select, ENTER to confirm
+    - Persists counts to data/stats_quiz.json
+    - Shows reveal + percentage screens
+    - Returns (CATEGORY_UPPER, blurb, percent_int)
+    """
+    # --- helpers ---
+    def score_from_weights(chosen_weight_maps):
+        from collections import defaultdict
+        totals = defaultdict(int)
+        for m in chosen_weight_maps:
+            for k, v in m.items():
+                totals[k] += v
+        if not totals:
+            return "REALIST"
+        return sorted(totals.items(), key=lambda kv: (-kv[1], kv[0]))[0][0]
+
+    def draw_frame(lines, highlight_idx=None, options_start_idx=None, hint_text=None, face_style="smile"):
+        screen.fill(BG)
+        if face_style:
+            draw_face(face_style, glitch=False)
+
+        base_x = 50
+        base_y = HEIGHT - 200
+        line_spacing = 32
+
+        for i, ln in enumerate(lines):
+            s = font.render(ln, True, TEXT)
+            screen.blit(s, (base_x, base_y + i*line_spacing))
+
+        # selector arrow
+        if highlight_idx is not None and options_start_idx is not None:
+            rel = highlight_idx - options_start_idx
+            arrow_y = base_y + (options_start_idx + rel)*line_spacing
+            pygame.draw.polygon(
+                screen, TEXT,
+                [(base_x-18, arrow_y+6), (base_x-6, arrow_y+12), (base_x-18, arrow_y+18)]
+            )
+
+        if hint_text:
+            s = font.render(hint_text, True, TEXT)
+            screen.blit(s, (24, HEIGHT - 40))
+
+        present()
+
+    # --- quiz flow ---
+    chosen_weights = []
+    labels = ["A) ", "B) ", "C) "]
+
+    for q in QUESTIONS:
+        # Build lines: prompt (wrapped) + A/B/C (short; wrap later if needed)
+        prompt_lines = wrap_text_to_width(q["prompt"], WIDTH - 100)
+        option_texts = [f"{labels[i]}{q['options'][i][0]}" for i in range(3)]
+        option_lines = option_texts
+
+        # Type everything onto the same slide (accumulating)
+        drawn_lines = []
+        x = 50
+        base_y = HEIGHT - 200
+        line_spacing = 32
+
+        for line in prompt_lines:
+            type_out_line_letterwise(line, drawn_lines, x, base_y, line_spacing,
+                                     draw_face_style="smile", glitch=False)
+            drawn_lines.append(line)
+
+        for opt_line in option_lines:
+            type_out_line_letterwise(opt_line, drawn_lines, x, base_y, line_spacing,
+                                     draw_face_style="smile", glitch=False)
+            drawn_lines.append(opt_line)
+
+        all_lines = drawn_lines[:]  # prompt + options on screen
+        options_start_idx = len(prompt_lines)
+
+        # Selection loop
+        selected = 0
+        hint = "use ↑/↓ to select • press ENTER"
+        selecting = True
+        while selecting:
+            draw_frame(
+                lines=all_lines,
+                highlight_idx=options_start_idx + selected,
+                options_start_idx=options_start_idx,
+                hint_text=hint,
+                face_style="smile"
+            )
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    pygame.quit(); sys.exit()
+                if event.type == pygame.KEYDOWN:
+                    if event.key in (pygame.K_UP, pygame.K_w):
+                        selected = (selected - 1) % 3
+                    elif event.key in (pygame.K_DOWN, pygame.K_s):
+                        selected = (selected + 1) % 3
+                    elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                        selecting = False
+            clock.tick(60)
+
+        # Save the weights for the chosen answer
+        chosen_weights.append(q["options"][selected][1])
+        soft_wait(120)
+
+    # Compute result
+    category = score_from_weights(chosen_weights)
+    blurb = CATEGORY_BLURBS.get(category, "")
+
+    # Persist + compute percentage
+    pct, counts_snapshot, _total = _tally_category_count(category)
+
+    # 1) Reveal line (wrapped + typed)
+    reveal = f"oh... that's very interesting.. you're a {category} then."
+    wrapped_reveal = wrap_text_to_width(reveal, WIDTH - 100)
+    drawn = []
+    x = 50
+    base_y = HEIGHT - 200
+    line_spacing = 32
+    for ln in wrapped_reveal:
+        type_out_line_letterwise_thoughtful(ln, drawn, x, base_y, line_spacing,
+                                            draw_face_style="smile", glitch=False)
+        drawn.append(ln)
+    wait_for_enter_release()
+
+    # 2) Percentage line (wrapped + typed)
+    perc_line = f"it's funny, i've conversed with a few people now and {pct}% of people are also {category}s"
+    wrapped_perc = wrap_text_to_width(perc_line, WIDTH - 100)
+    drawn = []
+    for ln in wrapped_perc:
+        type_out_line_letterwise_thoughtful(ln, drawn, x, base_y, line_spacing,
+                                            draw_face_style="smile", glitch=False)
+        drawn.append(ln)
+    wait_for_enter_release()
+
+    return category.upper(), blurb, pct
+
+
 # ====== Main flow ======
 def main_sequence():
-    traits = [
-        "trustworthy", "inquisitive", "determined", "altruistic",
-        "curious", "resolute", "thoughtful", "bold", "patient", "kind"
-    ]
-
     while True:
         # Title -> press ENTER -> slow synced fade to black
-        hold_screen()             # returns immediately after fade completes
+        hold_screen()             # returns after fade completes
 
         # Automatically start init NOW (no extra press here)
         init_screen()
@@ -796,16 +972,26 @@ def main_sequence():
 
         # Ask name
         name = input_name_screen()
-        trait = random.choice(traits).upper()
 
-        # Conversational sequence
+        # Conversational sequence (pre-quiz)
         show_text_block(f"hello, {name}", face_style="smile"); wait_for_enter_release()
-        show_text_block(f"it's a nice name... {trait}", face_style="smile"); wait_for_enter_release()
         show_text_block("i am called love machine", face_style="smile"); wait_for_enter_release()
-        show_text_block(f"not quite as {trait} as {name}. but it will do", face_style="smile"); wait_for_enter_release()
         show_text_block("i wonder...", face_style="neutral"); wait_for_enter_release()
         show_text_block("i have heard of an amazing human phenomenon", face_style="smile"); wait_for_enter_release()
         show_text_block("love", face_style="smile"); wait_for_enter_release()
+
+        # ====== QUIZ (ambient lighting only; same look & typing) ======
+        trait, blurb, pct = run_quiz_lm_style(screen, clock, font, participant_name=name)
+        os.environ["LM_PRINT_HEADER"]      = f"{name} — {trait}"
+        os.environ["LM_PRINT_TRAIT"]       = trait
+        os.environ["LM_PRINT_TRAIT_BLURB"] = blurb or ""
+        os.environ["LM_PRINT_TRAIT_PCT"]   = str(pct)
+
+        # Post-quiz trait-based dialogue (now uses the archetype)
+        show_text_block(f"it's a nice name... {trait}", face_style="smile"); wait_for_enter_release()
+        show_text_block(f"not quite as {trait} as {name}. but it will do", face_style="smile"); wait_for_enter_release()
+
+        # Writing task sequence
         show_text_block("i would like to know what love is", face_style="smile"); wait_for_enter_release()
         show_text_block("i want you to show me", face_style="smile"); wait_for_enter_release()
         show_text_block("to your right is a pen and paper", face_style="smile"); wait_for_enter_release()
@@ -835,6 +1021,7 @@ def main_sequence():
         # Fade / reset
         fade_to_black()
         lights_fade_up()  # bring ambience back for title loop
+
 
 if __name__ == "__main__":
     try:

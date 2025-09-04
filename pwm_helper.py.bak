@@ -1,0 +1,35 @@
+from pathlib import Path, PurePath
+import time
+
+CHIP_DIR = Path("/sys/class/pwm/pwmchip0")   # <- use the chip that worked
+PWM_DIR  = CHIP_DIR / "pwm0"                  # <- use the channel that worked
+
+EXPORT = CHIP_DIR / "export"
+PERIOD = PWM_DIR / "period"
+DUTY   = PWM_DIR / "duty_cycle"
+ENABLE = PWM_DIR / "enable"
+PERIOD_NS = 200_000  # 5 kHz
+
+def _wait_for(path, tries=200, delay=0.01):
+    for _ in range(tries):
+        if path.exists(): return True
+        time.sleep(delay)
+    return False
+
+def init_pwm():
+    if not CHIP_DIR.exists():
+        raise RuntimeError(f"{CHIP_DIR} missing — PWM driver not present")
+    if not PWM_DIR.exists():
+        chan = int(PWM_DIR.name.replace("pwm",""))
+        EXPORT.write_text(str(chan))
+        if not _wait_for(PERIOD): raise RuntimeError("PWM nodes not found after export")
+    if ENABLE.exists(): ENABLE.write_text("0")
+    PERIOD.write_text(str(PERIOD_NS))
+    DUTY.write_text("0")
+    ENABLE.write_text("1")
+
+def set_brightness(frac: float):
+    frac = 0.0 if frac < 0 else (1.0 if frac > 1.0 else frac)
+    duty = int(frac * PERIOD_NS)
+    if duty >= PERIOD_NS: duty = PERIOD_NS - 1
+    DUTY.write_text(str(duty))
