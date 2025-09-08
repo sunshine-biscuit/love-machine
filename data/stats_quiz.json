@@ -1,8 +1,10 @@
 {
-  "total": 5,
+  "total": 25,
   "categories": {
-    "CYNIC": 1,
-    "OPTIMIST": 3,
-    "CURIOUS": 1
+    "CYNIC": 5,
+    "OPTIMIST": 8,
+    "CURIOUS": 6,
+    "ROMANTIC": 4,
+    "REALIST": 2
   }
 }

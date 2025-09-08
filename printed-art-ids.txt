@@ -213,3 +213,19 @@
 2025-09-04T11:29:17.517133  866370b0-6f4d-43d4-be94-219b1ce8c99a  style=minimal  seed=485018010  name=Participant  trait=Curious
 2025-09-04T11:29:24.794951  57fec6ae-ae8f-44f7-8f11-72d433dedb5e  style=minimal  seed=870243166  name=Participant  trait=Curious
 2025-09-04T14:56:31.956538  d50db3d8-1ad8-4773-909d-4c7ea088fbda  style=minimal  seed=2693331930  name=BEKKERS  trait=OPTIMIST
+2025-09-07T09:40:51.290825  4f83d2fc-1f76-499a-80e2-5379f12c8113  style=minimal  seed=4046225683  name=KYLE  trait=gentle
+2025-09-07T10:10:40.786203  5167e635-6c04-473a-bb92-89215e794bab  style=cloudy  seed=1585007531  name=SAM  trait=Curious  archetype=Curious
+2025-09-07T10:34:33.044129  5e4ed283-6db3-4534-a5fb-592880e09f37  style=minimal  seed=2162204471  name=Usman  trait=Imaginative  archetype=Cynic
+2025-09-07T11:16:23.972967  df63392f-0d56-4c2b-9d42-8056c0902277  style=distinctive  seed=3230671479  name=CYRIL  trait=RESILIENT  archetype=OPTIMIST
+2025-09-07T11:27:36.436238  c413af97-423e-4ed7-a8f9-8c1af1b9e6e0  style=cloudy  seed=4055492320  name=REBECCA  trait=CURIOUS  archetype=CYNIC
+2025-09-07T12:01:21.387351  775ee4c8-2288-46d6-a963-4aabf717d85b  style=distinctive  seed=4145535067  name=KIRBY  trait=THOUGHTFUL  archetype=OPTIMIST
+2025-09-07T14:08:29.930178  047fdd87-ed7b-4ac9-a80b-b56cb1e5fd7a  style=minimal  seed=2984639866  name=GORDON  trait=SPIRITED  archetype=ROMANTIC
+2025-09-07T14:16:13.645027  d380f84d-b0af-4818-a80b-c9565eee19cf  style=distinctive  seed=1592662479  name=FRIEND  trait=REFLECTIVE  archetype=REALIST
+2025-09-07T14:33:15.770665  b9ff81d2-3789-4c76-8f6a-0c9b30252c02  style=distinctive  seed=807742466  name=KING  trait=KIND  archetype=OPTIMIST
+2025-09-07T14:35:53.602005  5db06a1b-e81a-4277-8f22-979cea44bf13  style=graphic  seed=3930373907  name=LUCAS  trait=DETERMINED  archetype=CURIOUS
+2025-09-07T15:11:02.703003  7ca52026-1cb4-4e29-8cb7-ec4225db4119  style=structured  seed=635126041  name=REBEKAH  trait=RESILIENT  archetype=CURIOUS
+2025-09-07T16:17:04.308187  712fc200-8fa2-4c72-8fef-0bfcda65909e  style=distinctive  seed=3664089246  name=REBEKAH  trait=BOLD  archetype=ROMANTIC
+2025-09-07T16:29:21.773984  77853f41-f8b4-470a-a2f9-077aa7cac9d4  style=cloudy  seed=2815085012  name=JIM  trait=PATIENT  archetype=CYNIC
+2025-09-08T18:23:47.556468  c5e7e0bd-912a-48e1-a949-b4ac2c914147  style=distinctive  seed=747716935  name=HANS  trait=PLAYFUL  archetype=REALIST
+2025-09-09T08:27:19.362184  a1d10e4c-456c-4e18-a66b-7ae8062af519  style=minimal  seed=103478553  name=SAMANTHA  trait=IMAGINATIVE  archetype=ROMANTIC
+2025-09-09T08:38:56.114740  711a5d0d-ec4e-490a-9d86-3e1aa1d4af13  style=minimal  seed=2715070227  name=BEK  trait=DETERMINED  archetype=CYNIC

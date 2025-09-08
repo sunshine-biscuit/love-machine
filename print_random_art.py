@@ -240,31 +240,59 @@ def gen_radial_burst(seed, w, h):
 
 def gen_maze(seed, w, h):
     rng = np.random.default_rng(seed)
-    cols = max(16, w // rng.integers(18, 28)); rows = max(16, h // rng.integers(18, 28))
-    grid = np.zeros((rows, cols), dtype=np.uint8); visited = np.zeros_like(grid, dtype=bool)
+
+    # choose grid density, then ensure odd dimensions
+    cols = max(17, w // int(rng.integers(18, 28)))
+    rows = max(17, h // int(rng.integers(18, 28)))
+    if cols % 2 == 0: cols -= 1
+    if rows % 2 == 0: rows -= 1
+
+    grid = np.zeros((rows, cols), dtype=np.uint8)
+    visited = np.zeros_like(grid, dtype=bool)
+
+    # cardinal directions (step by 2 in the carving phase)
     dirs = [(1,0), (-1,0), (0,1), (0,-1)]
+
     def nbs(r, c):
         out = []
         for dr, dc in dirs:
             nr, nc = r + 2*dr, c + 2*dc
             if 0 <= nr < rows and 0 <= nc < cols and not visited[nr, nc]:
                 out.append((nr, nc, dr, dc))
-        rng.shuffle(out); return out
-    r0 = int(rng.integers(0, rows) | 1); c0 = int(rng.integers(0, cols) | 1)
-    stack = [(r0, c0)]; visited[r0, c0] = True; grid[r0, c0] = 1
+        rng.shuffle(out)
+        return out
+
+    # start on a guaranteed odd cell strictly inside bounds
+    r0 = 2 * int(rng.integers(0, rows // 2)) + 1
+    c0 = 2 * int(rng.integers(0, cols // 2)) + 1
+    r0 = min(rows - 2, max(1, r0))
+    c0 = min(cols - 2, max(1, c0))
+
+    stack = [(r0, c0)]
+    visited[r0, c0] = True
+    grid[r0, c0] = 1
+
     while stack:
-        r, c = stack[-1]; neigh = nbs(r, c)
-        if not neigh: stack.pop(); continue
+        r, c = stack[-1]
+        neigh = nbs(r, c)
+        if not neigh:
+            stack.pop()
+            continue
         nr, nc, dr, dc = neigh[0]
-        grid[r + dr, c + dc] = 1; grid[nr, nc] = 1; visited[nr, nc] = True
+        grid[r + dr, c + dc] = 1  # carve connector
+        grid[nr, nc] = 1         # carve next cell
+        visited[nr, nc] = True
         stack.append((nr, nc))
+
+    # render the maze to image
     cell = int(rng.integers(4, 7))
-    img = Image.new("L", (cols*cell, rows*cell), 0); px = img.load()
+    img = Image.new("L", (cols * cell, rows * cell), 0)
+    px = img.load()
     for y in range(rows):
         for x in range(cols):
             if grid[y, x]:
-                for yy in range(y*cell, (y+1)*cell):
-                    for xx in range(x*cell, (x+1)*cell):
+                for yy in range(y * cell, (y + 1) * cell):
+                    for xx in range(x * cell, (x + 1) * cell):
                         px[xx, yy] = 220
     img = img.resize((w, h), Image.NEAREST)
     return img.filter(ImageFilter.GaussianBlur(radius=float(rng.uniform(0.4, 0.9))))
@@ -278,7 +306,6 @@ def random_flip_rotate(img, rng):
     return img
 
 def _normalize_layer(img_l):
-    # Gentle autolevel for layer so it stands out in blends
     img_l = ImageOps.autocontrast(img_l, cutoff=(2, 2))
     img_l = ImageEnhance.Contrast(img_l).enhance(1.05)
     return img_l
@@ -307,12 +334,10 @@ def generate_image(style_name, seed, target_width):
     style = STYLES[style_name]
     base_h = max(MIN_BASE_HEIGHT, int(target_width * rng.uniform(1.7, 2.0)))
 
-    # pick base
     base_variant = _pick_variant(rng, style["base"])
     base = _make_layer(base_variant, seed, target_width, base_h, style)
     base = random_flip_rotate(base, rng)
 
-    # layering
     if rng.random() < style["layer_prob"]:
         min_l, max_l = style["layers"]
         layer_count = int(rng.integers(min_l, max_l+1))
@@ -336,7 +361,6 @@ def generate_image(style_name, seed, target_width):
     else:
         img = base
 
-    # subtle edge softener to avoid heavy borders
     if rng.random() < 0.65:
         w_, h_ = img.size
         cx, cy = w_//2, h_//2
@@ -390,7 +414,6 @@ def prep_for_printer(img_gray, max_width, target_mean=140, margin_px=8, margin_t
     if w!=max_width:
         img_gray=img_gray.resize((max_width,int(h*(max_width/w))),Image.BILINEAR)
     img_gray=_auto_levels(img_gray)
-    # midtone nudge
     m = ImageStat.Stat(img_gray).mean[0]
     if m < target_mean-12: img_gray=_auto_levels(img_gray,0.04,0.06,1.1,0.9)
     elif m > target_mean+12: img_gray=_auto_levels(img_gray,0.06,0.04,1.1,1.1)
@@ -446,36 +469,69 @@ def parse_args():
     p.add_argument("--name", default="", help="Participant name (printed in header)")
     p.add_argument("--trait", default="", help="Assigned trait (printed in header)")
     p.add_argument("--style", default="", help=f"Force style: one of {', '.join(STYLE_NAMES)}")
+    # NEW: archetype support
+    p.add_argument("--archetype", default="", help="Quiz archetype (printed in header)")
     return p.parse_args()
 
 # ====== MAIN ======
 def main():
     args = parse_args()
-    name  = (args.name or "Participant").strip()
-    trait = (args.trait or "Curious").strip()
+    name = (args.name or "Participant").strip().upper()
+    trait = (args.trait or "Curious").strip().upper()
+    archetype = (getattr(args, "archetype", "") or "").strip().upper()
     force_style = (args.style or "").strip().lower()
 
     rng=np.random.default_rng()
     style_name = force_style if force_style in STYLES else random.choice(STYLE_NAMES)
     run_uuid,seed=new_run_seed()
-    print(f"Style: {style_name} | run id: {run_uuid} | seed: {seed} | name: {name} | trait: {trait}")
+    print(f"Style: {style_name} | run id: {run_uuid} | seed: {seed} | name: {name} | trait: {trait}" + (f" | archetype: {archetype}" if archetype else ""))
 
     # Generate art and compose header
-    art=generate_image(style_name,seed,PRINTER_DOTS)
-    font=_load_header_font()
-    text=f"{name} — {trait}" if trait else name
-    bbox=font.getbbox(text); header_h=(bbox[3]-bbox[1]) if bbox else HEADER_FONT_SIZE+6
-    header_total=HEADER_TOP+header_h+HEADER_BOTTOM_GAP
-    canvas_h=max(MIN_BASE_HEIGHT,art.height+header_total)
-    canvas=Image.new("L",(PRINTER_DOTS,canvas_h),255)
-    d=ImageDraw.Draw(canvas); d.text((HEADER_LEFT,HEADER_TOP),text,font=font,fill=0)
-    canvas.paste(art,(0,header_total))
+    art = generate_image(style_name, seed, PRINTER_DOTS)
+    font = _load_header_font()
+
+    # Build up to 3 header lines: Name / Trait / Archetype (only non-empty shown)
+    header_lines = [name] if name else []
+    if trait:
+        header_lines.append(trait)
+    if archetype:
+        header_lines.append(archetype)
+
+    # Measure total header height (line by line)
+    LINE_GAP = 6
+    y = HEADER_TOP
+    line_heights = []
+    for ln in header_lines:
+        bbox = font.getbbox(ln) if ln else None
+        lh = (bbox[3] - bbox[1]) if bbox else (HEADER_FONT_SIZE + 6)
+        line_heights.append(lh)
+
+    header_h = sum(line_heights) + (LINE_GAP * max(0, len(header_lines) - 1))
+    header_total = y + header_h + HEADER_BOTTOM_GAP
+
+    canvas_h = max(MIN_BASE_HEIGHT, art.height + header_total)
+    canvas = Image.new("L", (PRINTER_DOTS, canvas_h), 255)
+    d = ImageDraw.Draw(canvas)
+
+    # Draw each header line
+    y = HEADER_TOP
+    for i, ln in enumerate(header_lines):
+        d.text((HEADER_LEFT, y), ln, font=font, fill=0)
+        y += line_heights[i]
+        if i < len(header_lines) - 1:
+            y += LINE_GAP
+
+    # Paste art underneath header
+    canvas.paste(art, (0, header_total))
 
     # Prep, save, log, print
     img_1=prep_for_printer(canvas,PRINTER_DOTS)
     img_1.save(PREVIEW_PNG); print(f"Saved preview: {PREVIEW_PNG}")
     with open(LOG_FILE,"a") as f:
-        f.write(f"{datetime.now().isoformat()}  {run_uuid}  style={style_name}  seed={seed}  name={name}  trait={trait}\n")
+        f.write(
+            f"{datetime.now().isoformat()}  {run_uuid}  style={style_name}  seed={seed}  "
+            f"name={name}  trait={trait}" + (f"  archetype={archetype}" if archetype else "") + "\n"
+        )
     send_image_escpos(PRINTER_IP,PRINTER_PORT,img_1); print("Sent to printer.")
 
 if __name__ == "__main__":
