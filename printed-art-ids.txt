@@ -229,3 +229,18 @@
 2025-09-08T18:23:47.556468  c5e7e0bd-912a-48e1-a949-b4ac2c914147  style=distinctive  seed=747716935  name=HANS  trait=PLAYFUL  archetype=REALIST
 2025-09-09T08:27:19.362184  a1d10e4c-456c-4e18-a66b-7ae8062af519  style=minimal  seed=103478553  name=SAMANTHA  trait=IMAGINATIVE  archetype=ROMANTIC
 2025-09-09T08:38:56.114740  711a5d0d-ec4e-490a-9d86-3e1aa1d4af13  style=minimal  seed=2715070227  name=BEK  trait=DETERMINED  archetype=CYNIC
+2025-09-10T08:33:55.167394  6d9bbedd-95d0-45a9-b33f-6b8ce7d2eb18  style=minimal  seed=3889359640  name=DARREN  trait=KIND  archetype=OPTIMIST
+2025-09-10T10:12:26.578922  2f9ce98c-0be6-4c22-a30d-6caafe66825b  style=structured  seed=4268130907  name=PARTICIPANT  trait=CURIOUS
+2025-09-10T10:13:06.557727  b99296c4-d57c-44d4-8ef7-b25815ca5cec  style=cloudy  seed=365583596  name=PARTICIPANT  trait=CURIOUS
+2025-09-10T10:13:15.429626  44ef856e-180a-4e00-9692-a7032e18c18a  style=minimal  seed=773374346  name=PARTICIPANT  trait=CURIOUS
+2025-09-10T10:17:10.242143  c33acd29-d2b3-4140-8a61-b022803d4e3c  style=minimal  seed=2151501372  name=KK  trait=GROUNDED  archetype=ROMANTIC
+2025-09-10T10:35:47.152485  55692b6f-0e6f-4b5f-9808-68528b651b32  style=distinctive  seed=2338659122  name=LENNY  trait=PLAYFUL  archetype=OPTIMIST
+2025-09-10T10:45:39.005363  2c81c1bb-d8e2-4efc-928b-281532b710aa  style=cloudy  seed=850858154  name=LISA  trait=PATIENT  archetype=ROMANTIC
+2025-09-10T15:56:13.141677  83ad05aa-b1f7-47c5-81b4-692c236b4141  style=structured  seed=594231617  name=GUS  trait=REFLECTIVE  archetype=OPTIMIST
+2025-09-10T16:19:05.944178  7cd6c627-f94e-4e59-af7e-67115a88b25e  style=graphic  seed=1518907998  name=SAM  trait=GROUNDED  archetype=REALIST
+2025-09-11T08:51:20.973547  f6c6f49b-477e-48ec-afbb-8611ec12e831  style=minimal  seed=3960662065  name=SUSAN  trait=BOLD  archetype=OPTIMIST
+2025-09-12T08:56:39.454808  e13f5018-77b8-4376-b0d7-086d488bb8bb  style=structured  seed=1217116347  name=JUSTIN  trait=STEADFAST  archetype=CYNIC
+2025-09-13T10:29:44.397375  e8d02251-234b-46cc-9071-5c5377b99537  style=distinctive  seed=2008651063  name=JO  trait=GROUNDED  archetype=ROMANTIC
+2025-09-13T10:36:07.959692  3fac501f-02c4-4405-9df9-0063f9e68be1  style=structured  seed=4192635873  name=KYLIE  trait=PATIENT  archetype=OPTIMIST
+2025-09-13T13:58:21.907779  78dec9e3-4fb9-4c33-92d3-46e9b4dce52f  style=graphic  seed=3034375471  name=REBEKAH  trait=PATIENT  archetype=OPTIMIST
+2025-09-13T14:28:05.095919  a17f4615-fc56-409f-9c50-696228b3463f  style=minimal  seed=682837567  name=LUCY  trait=OPTIMISTIC  archetype=OPTIMIST
