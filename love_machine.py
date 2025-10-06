@@ -8,9 +8,6 @@ os.environ.setdefault("SDL_AUDIODRIVER", "pulseaudio")
 import pygame
 from crt_effects import CRTEffects
 
-# Pi pin setup before pygame init
-subprocess.run(["sudo","/usr/local/bin/pinctrl","set","12","a0"], check=False)
-
 # ====== Sensor (IR obstacle) ======
 try:
     import RPi.GPIO as GPIO
@@ -18,11 +15,17 @@ try:
 except Exception as _e:
     print("[WARN] RPi.GPIO not available:", _e)
     _GPIO_OK = False
+    
 
 SENSOR_PIN = 17            # BCM numbering (physical pin 11)
 SENSOR_ACTIVE_LOW = True   # Most LM393 IR boards pull LOW when they see an object
 SENSOR_DEBOUNCE_MS = 120   # must be continuously "active" this long to count
 SENSOR_REQUIRE_CLEAR_MS = 200  # require a clear state first, avoids false boot triggers
+
+
+# Spot light (simple ON/OFF on GPIO13)
+from spot_simple import init_spot, spot_on, spot_off, cleanup_spot
+init_spot()  # starts OFF
 
 
 def _init_sensor_gpio():
@@ -31,9 +34,7 @@ def _init_sensor_gpio():
     # IMPORTANT: Power the module from **3.3V** if possible so OUT never goes to 5V.
     # If you must power it from 5V, use a level shifter or a resistor divider on OUT.
     GPIO.setmode(GPIO.BCM)
-    # Many LM393 boards are push-pull, but a pull-up gives a defined idle if floating.
     GPIO.setup(SENSOR_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-    # Let the sensor settle
     time.sleep(0.08)
 
 
@@ -41,7 +42,6 @@ def _sensor_read_active() -> bool:
     if not _GPIO_OK:
         return False
     v = GPIO.input(SENSOR_PIN)
-    # active when LOW on most boards
     return (v == 0) if SENSOR_ACTIVE_LOW else (v == 1)
 
 
@@ -49,9 +49,10 @@ from pwm_helper import init_pwm, set_brightness
 init_pwm()                   # start hardware PWM
 set_brightness(0.22)         # force ambient immediately (0.22 = 22%)
 
+# === Use your original quiz + archetypes again ===
 from quiz_data import QUESTIONS, CATEGORY_BLURBS
-print(f"[quiz] Loaded {len(CATEGORY_BLURBS or {})} archetype categories.")
 
+print(f"[quiz] Loaded {len(CATEGORY_BLURBS or {})} archetype categories.")
 
 def to_caps(s: str) -> str:
     return (s or "").strip().upper()
@@ -59,24 +60,28 @@ def to_caps(s: str) -> str:
 
 # ====== Audio: robust initialisation ======
 def _init_audio(retries=5, delay=0.4):
-    pygame.mixer.pre_init(frequency=44100, size=-16, channels=2, buffer=1024)
-    pygame.init()
-    last = None
-    for _ in range(retries):
-        try:
-            pygame.mixer.init()
-            return True
-        except Exception as e:
-            last = e
-            time.sleep(delay)
-    print(f"[WARN] pygame.mixer.init failed: {last}")
-    return False
+    # Best match for USB audio — 48kHz, larger buffer
+    try:
+        pygame.mixer.pre_init(frequency=48000, size=-16, channels=2, buffer=2048)
+        pygame.init()
+        last = None
+        for _ in range(retries):
+            try:
+                pygame.mixer.init(frequency=48000, size=-16, channels=2, buffer=2048)
+                return True
+            except Exception as e:
+                last = e
+                time.sleep(delay)
+        print(f"[WARN] pygame.mixer.init failed: {last}")
+        return False
+    except Exception as e:
+        print(f"[WARN] Audio init exception: {e}")
+        return False
 
 
 _init_audio()
 
 # ====== Key-press sound (for typewriter output only) ======
-# Put your file at: /home/lovemachine/love-machine/assets/key_press.wav
 KEYCLICK_PATH = os.path.join(os.path.dirname(__file__), "assets", "key_press.wav")
 KEYCLICK_SND = None
 _KEYCLICK_CHS = []
@@ -93,8 +98,7 @@ def _init_keyclick():
         if os.path.isfile(KEYCLICK_PATH):
             KEYCLICK_SND = pygame.mixer.Sound(KEYCLICK_PATH)
             KEYCLICK_SND.set_volume(0.35)  # adjust to taste
-        # reserve a few channels so rapid clicks don't cut each other off
-        base = 3  # use channels 3–5 (0–1 are mixer.music internals; 7 used by boot loop)
+        base = 3  # channels 3–5 kept for clicks; 7 is boot loop
         _KEYCLICK_CHS = [pygame.mixer.Channel(base + i) for i in range(3)]
     except Exception as e:
         print("[WARN] keyclick init failed:", e)
@@ -116,7 +120,7 @@ def _play_keyclick(ch: str):
     chn = _KEYCLICK_CHS[_KEYCLICK_IDX % len(_KEYCLICK_CHS)]
     _KEYCLICK_IDX += 1
     try:
-        chn.stop()     # ensure clean attack
+        chn.stop()
         chn.play(KEYCLICK_SND)
     except Exception:
         pass
@@ -134,10 +138,8 @@ def _get_env_flag(name, default=False):
     return bool(default)
 
 
-# Dev toggle: set LM_WINDOWED=1 or pass --windowed to run windowed
 DEV_WINDOWED = _get_env_flag("LM_WINDOWED", False) or ("--windowed" in sys.argv)
 
-# Logical 4:3 render size (smaller = faster). Override with LM_CANVAS="1024x768"
 _canvas_env = (os.getenv("LM_CANVAS") or "").lower()
 if "x" in _canvas_env:
     try:
@@ -148,27 +150,21 @@ if "x" in _canvas_env:
 else:
     LOGICAL_W, LOGICAL_H = 960, 720
 
-# Keep WIDTH/HEIGHT for the rest of your code
 WIDTH, HEIGHT = LOGICAL_W, LOGICAL_H
 TARGET_RATIO = 4 / 3
 
-# Create display
 if DEV_WINDOWED:
-    # Windowed dev mode (e.g., Mac)
     display = pygame.display.set_mode((LOGICAL_W, LOGICAL_H))
 else:
-    # True fullscreen on the Pi
     _info = pygame.display.Info()
     display = pygame.display.set_mode((_info.current_w, _info.current_h), pygame.FULLSCREEN)
 
 pygame.display.set_caption("Love Machine")
-pygame.mouse.set_visible(False)  # hide cursor on launch (both modes)
+pygame.mouse.set_visible(False)
 clock = pygame.time.Clock()
 
-# 4:3 canvas you draw onto (keep using the name `screen` everywhere)
 screen = pygame.Surface((LOGICAL_W, LOGICAL_H)).convert()
 
-# Compute destination rect where the canvas will be letterboxed on the real display
 if DEV_WINDOWED:
     DEST_W, DEST_H = LOGICAL_W, LOGICAL_H
     DEST_X, DEST_Y = 0, 0
@@ -185,24 +181,19 @@ else:
     DEST_Y = (sh - DEST_H) // 2
 
 
-# ====== Caret (text cursor) helper ======
+# ====== Caret helper ======
 def draw_caret(surface, x, y, font_obj, color=(0, 255, 0)):
-    """
-    Draw a vertical caret aligned with the text baseline.
-    - x, y should be the baseline of the text (same y used for blitting the text).
-    """
-    h = int(font_obj.get_height() * 0.9)   # caret height (e.g., 90% of font height)
-    w = max(3, int(h * 0.40))              # thickness
-    top_y = y - h                          # shift upwards so caret sits on baseline
+    h = int(font_obj.get_height() * 0.9)
+    w = max(3, int(h * 0.40))
+    top_y = y - h
     pygame.draw.rect(surface, color, (x, top_y, w, h))
 
 
-# ====== CRT bound to the logical canvas ======
+# ====== CRT ======
 crt = CRTEffects((LOGICAL_W, LOGICAL_H), enable_flicker=False)
 
 
 def present():
-    """Apply CRT to the 4:3 canvas, scale once, letterbox, then flip."""
     crt.apply(screen, 0.0)
     scaled = pygame.transform.smoothscale(screen, (DEST_W, DEST_H))
     display.fill((0, 0, 0))
@@ -210,21 +201,51 @@ def present():
     pygame.display.flip()
 
 
+
+
 # ====== Developer-friendly exits ======
-# - In DEV_WINDOWED: ESC quits immediately
-# - In fullscreen: hold F12 ~0.7s, OR triple-tap ESC within 800ms
-_EXIT_HOLD_MS = 700
-_ESC_TAP_WINDOW_MS = 800
+_EXIT_HOLD_MS = 700               # hold F12 to quit
+_ESC_TAP_WINDOW_MS = 900          # 3x ESC within this window = reset to title
 _f12_down_at = None
 _esc_taps = []
 
+# You already added these earlier, but keep them here with the rest for clarity:
+_F10_TAP_WINDOW_MS = 2000         # 5x F10 within 2s = quit to desktop
+_f10_taps = []
+
+# ====== Soft reset to title support ======
+class ResetToTitle(Exception):
+    pass
+
+_RESET_REQUESTED = False
+
+def _request_reset():
+    global _RESET_REQUESTED
+    _RESET_REQUESTED = True
+
+def _reset_guard():
+    """Call once per frame in long loops. If reset requested, jump back to title."""
+    if _RESET_REQUESTED:
+        raise ResetToTitle()
+
+
 
 def _dev_exit_check(ev_iterable):
-    global _f12_down_at, _esc_taps
-    now = pygame.time.get_ticks()
+    """
+    Wrap your event iterator:
+      - ESC x3 within window => request soft reset to title
+      - F10 x5 within 2s     => quit to desktop
+      - Hold F12             => quit to desktop
+      - In DEV_WINDOWED mode => single ESC quits (unchanged)
+    Yields all events back to caller.
+    """
+    global _f12_down_at, _esc_taps, _f10_taps
 
-    if DEV_WINDOWED:
-        # Easy dev exit
+    now = pygame.time.get_ticks()
+    DEV_W = globals().get("DEV_WINDOWED", False)
+
+    # If running windowed for dev, a single ESC can still quit immediately
+    if DEV_W:
         keys = pygame.key.get_pressed()
         if keys[pygame.K_ESCAPE]:
             print("[EXIT] ESC (dev window).")
@@ -232,46 +253,57 @@ def _dev_exit_check(ev_iterable):
             sys.exit()
 
     for ev in ev_iterable:
+        # Always handle hard quits
         if ev.type == pygame.QUIT:
             pygame.quit()
             sys.exit()
 
-        if not DEV_WINDOWED:
-            # F12 hold
-            if ev.type == pygame.KEYDOWN and ev.key == pygame.K_F12:
-                _f12_down_at = now
-            elif ev.type == pygame.KEYUP and ev.key == pygame.K_F12:
-                _f12_down_at = None
+        # ---------- F12 hold => Quit to desktop ----------
+        if ev.type == pygame.KEYDOWN and ev.key == pygame.K_F12:
+            _f12_down_at = now
+        elif ev.type == pygame.KEYUP and ev.key == pygame.K_F12:
+            _f12_down_at = None
 
-            if _f12_down_at is not None and (now - _f12_down_at) >= _EXIT_HOLD_MS:
-                print("[EXIT] F12 held. Exiting.")
+        if _f12_down_at is not None and (now - _f12_down_at) >= _EXIT_HOLD_MS:
+            print("[EXIT] F12 held. Exiting to desktop.")
+            pygame.quit()
+            sys.exit()
+
+        # ---------- ESC x3 => Soft reset (do NOT quit) ----------
+        if ev.type == pygame.KEYDOWN and ev.key == pygame.K_ESCAPE:
+            _esc_taps = [t for t in _esc_taps if now - t <= _ESC_TAP_WINDOW_MS]
+            _esc_taps.append(now)
+            if len(_esc_taps) >= 3:
+                print("[RESET] ESC x3 → reset to start.")
+                _request_reset()   # sets the flag; your loops will catch via _reset_guard()
+
+        # ---------- F10 x5 => Quit to desktop ----------
+        if ev.type == pygame.KEYDOWN and ev.key == pygame.K_F10:
+            _f10_taps = [t for t in _f10_taps if now - t <= _F10_TAP_WINDOW_MS]
+            _f10_taps.append(now)
+            if len(_f10_taps) >= 5:
+                print("[EXIT] F10 x5. Exiting to desktop.")
                 pygame.quit()
                 sys.exit()
 
-            # ESC triple tap within window
-            if ev.type == pygame.KEYDOWN and ev.key == pygame.K_ESCAPE:
-                _esc_taps = [t for t in _esc_taps if now - t <= _ESC_TAP_WINDOW_MS]
-                _esc_taps.append(now)
-                if len(_esc_taps) >= 3:
-                    print("[EXIT] ESC x3. Exiting.")
-                    pygame.quit()
-                    sys.exit()
-
+        # Yield original event back to caller
         yield ev
 
 
 def events():
-    """Use this everywhere you loop over pygame events."""
+    # If ESC×3 requested a reset, interrupt the current screen immediately
+    if _RESET_REQUESTED:
+        raise ResetToTitle()
     yield from _dev_exit_check(pygame.event.get())
 
 
 # ====== Paths & font ======
 ASSETS_DIR = os.path.join(os.path.dirname(__file__), "assets")
 FONT_PATH = os.path.join(ASSETS_DIR, "Px437_IBM_DOS_ISO8.ttf")
-FONT_SIZE = int(os.getenv("LM_FONT", "40"))  # was 28 → bigger default
+FONT_SIZE = int(os.getenv("LM_FONT", "40"))
 font = pygame.font.Font(FONT_PATH, FONT_SIZE)
 
-# ====== Music (Title track: Foreigner) ======
+# ====== Music ======
 MUSIC_DIR = os.path.join(ASSETS_DIR, "music")
 _AUDIO_EXTS = (".wav", ".ogg", ".mp3", ".flac")
 
@@ -316,7 +348,7 @@ def _load_title_music():
         return True
     except Exception as e:
         print(f"[ERROR] Could not load {TITLE_MUSIC}: {e}")
-        print("[HINT] Use an OGG or PCM WAV (44.1kHz, 16‑bit) in assets/music/.")
+        print("[HINT] Use an OGG or PCM WAV (44.1kHz, 16-bit) in assets/music/.")
         return False
 
 
@@ -330,13 +362,12 @@ BOOT_CH = None
 
 
 def _init_boot_sound():
-    """Prepare Channel(7) and load assets/music/boot_loop.ogg"""
     global BOOT_SOUND, BOOT_CH
     try:
         if not pygame.mixer.get_init():
             _init_audio()
         if BOOT_CH is None:
-            BOOT_CH = pygame.mixer.Channel(7)  # dedicated channel, won't clash with mixer.music
+            BOOT_CH = pygame.mixer.Channel(7)  # dedicated channel
         if BOOT_SOUND is None:
             if os.path.isfile(BOOT_MUSIC_PATH):
                 BOOT_SOUND = pygame.mixer.Sound(BOOT_MUSIC_PATH)
@@ -352,7 +383,6 @@ def _init_boot_sound():
 
 
 def boot_loop_start(vol=0.6):
-    """Start looping boot sound on Channel(7)"""
     if BOOT_SOUND is None or BOOT_CH is None:
         if not _init_boot_sound():
             return
@@ -364,7 +394,6 @@ def boot_loop_start(vol=0.6):
 
 
 def boot_loop_stop():
-    """Fade out/stop boot loop on Channel(7)"""
     try:
         if BOOT_CH:
             BOOT_CH.fadeout(250)
@@ -372,7 +401,7 @@ def boot_loop_stop():
         pass
 
 
-_init_boot_sound()  # preload boot sound for instant start
+_init_boot_sound()
 
 # ====== Colours & typing ======
 TEXT = (0, 255, 0)
@@ -386,7 +415,6 @@ ELLIPSIS_RAMP = 0.45
 ELLIPSIS_DOT_PAUSE_MS = 120
 ELLIPSIS_AFTER_PAUSE_MS = 350
 
-# ====== Title fade timing ======
 TITLE_FADE_MS = 3000
 
 # ==== Quiz stats persistence ====
@@ -428,7 +456,7 @@ def _tally_category_count(chosen_category):
     return pct, dict(cats), total
 
 
-# ================== LIGHTING (hardware PWM via pwm_helper) ==================
+# ================== LIGHTING ==================
 AMBIENT_LIGHT = 0.22
 SHOW_LIGHT = 0.90
 
@@ -475,7 +503,7 @@ class LightPWM:
                     eased = 0.5 - 0.5 * math.cos(math.pi * t)
                     cur = self.start_level + (self.target - self.start_level) * eased
                 self.level = cur
-            self._apply(self.level)
+            set_brightness(self.level)
 
     def stop(self, turn_off=False):
         self._stop = True
@@ -484,7 +512,7 @@ class LightPWM:
         except Exception:
             pass
         try:
-            self._apply(0.0 if turn_off else self.level)
+            set_brightness(0.0 if turn_off else self.level)
         except Exception:
             pass
 
@@ -506,34 +534,24 @@ def soft_wait(ms):
     while pygame.time.get_ticks() < end:
         for _event in events():
             pass
+            _reset_guard()
+
         clock.tick(240)
 
 
 def wait_for_enter_release(timeout_ms=800):
-    """
-    Return immediately if ENTER is not currently held.
-    Otherwise, wait until it's released (or timeout to avoid hangs).
-    """
     start = pygame.time.get_ticks()
-
-    # If ENTER isn't held right now, we're done — no need to wait for a KEYUP event.
     keys = pygame.key.get_pressed()
     if not (keys[pygame.K_RETURN] or keys[pygame.K_KP_ENTER]):
         return
-
-    # ENTER is held — wait for release or timeout.
     while True:
         for _ in events():
-            pass  # keep processing quit/exit gestures
-
+            pass
         keys = pygame.key.get_pressed()
         if not (keys[pygame.K_RETURN] or keys[pygame.K_KP_ENTER]):
             return
-
         if pygame.time.get_ticks() - start >= timeout_ms:
-            # Failsafe: don't hang the app if a KEYUP is somehow lost
             return
-
         clock.tick(120)
 
 
@@ -680,43 +698,30 @@ def wrap_text_to_width(text, max_width):
     return lines
 
 
-# --- Boot-style variable-speed typewriter (tiny font, tight spacing, left-aligned) ---
+# ====== Boot typing (init screen) ======
 def _boot_delays_for(text: str, base_cps: float = 22.0, jitter: float = 0.50):
-    """
-    Per-character delays with jitter + punctuation pauses + occasional stalls.
-    base_cps: average characters per second (higher = faster).
-    """
     base_cps = max(4.0, float(base_cps))
     base_delay = 1.0 / base_cps
     delays, i = [], 0
     while i < len(text):
         ch = text[i]
         d = base_delay * random.uniform(1.0 - jitter, 1.0 + jitter)
-
-        # Ellipses cluster "..."
         if text[i : i + 3] == "...":
             delays.extend([d, d, d + base_delay * 3.5])
             i += 3
-            if random.random() < 1 / 15:  # rare micro-stall
+            if random.random() < 1 / 15:
                 delays[-1] += base_delay * random.uniform(2.0, 4.0)
             continue
-
-        # Punctuation pauses
         if ch in ",;:":
             d += base_delay * 1.5
         elif ch in ".!?)]}":
             d += base_delay * 2.5
         elif ch == "\t":
             d += base_delay * 2.0
-
-        # Occasional fast burst
         if random.random() < 1 / 18:
             d *= 0.4
-
         delays.append(d)
         i += 1
-
-        # Rare micro-stall
         if random.random() < 1 / 60:
             delays[-1] += base_delay * random.uniform(2.0, 4.0)
     return delays
@@ -730,15 +735,13 @@ def typewriter_boot_screen(
     bg=(0, 0, 0),
     start_x=50,
     start_y=None,
-    line_spacing_px=8,  # very tight spacing
+    line_spacing_px=8,
     base_cps=22.0,
     jitter=0.55,
     allow_skip_with_key=True,
-    crt_effects=None,  # present() already applies CRT
+    crt_effects=None,
 ):
     local_clock = pygame.time.Clock()
-
-    # caret blink state (reuse global cadence)
     blink = True
     last_blink = pygame.time.get_ticks()
 
@@ -752,7 +755,6 @@ def typewriter_boot_screen(
     char_i = 0
     t_next = time.perf_counter()
 
-    # ---- typing phase ----
     typing = True
     while typing:
         now = time.perf_counter()
@@ -774,12 +776,10 @@ def typewriter_boot_screen(
                 char_i = 0
                 line_idx += 1
 
-        # blink timing
         if pygame.time.get_ticks() - last_blink > BLINK_INTERVAL_MS:
             blink = not blink
             last_blink = pygame.time.get_ticks()
 
-        # draw
         screen.fill(bg)
         y = start_y
         for s in typed:
@@ -787,7 +787,6 @@ def typewriter_boot_screen(
             screen.blit(surf, (start_x, y))
             y += font_obj.get_height() + line_spacing_px
 
-        # blinking caret at end of current/last line
         caret_line_idx = min(line_idx, len(lines) - 1)
         last_text = typed[caret_line_idx]
         if blink:
@@ -801,14 +800,12 @@ def typewriter_boot_screen(
         if line_idx >= len(lines) and typed[-1] == lines[-1]:
             break
 
-    # ---- wait for ENTER phase ----
     waiting = True
     while waiting:
         for ev in events():
             if ev.type == pygame.KEYDOWN and ev.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
                 waiting = False
 
-        # blink timing
         if pygame.time.get_ticks() - last_blink > BLINK_INTERVAL_MS:
             blink = not blink
             last_blink = pygame.time.get_ticks()
@@ -833,51 +830,48 @@ def typewriter_boot_screen(
 
 
 def init_screen():
-    # ---- START BOOT LOOP (USB speakers) ----
     boot_loop_start(vol=0.6)
 
+    # Scattered “Is it…” lines among normal lines
     boot_lines = [
         "initialising system v1.0.3",
         "loading kernel modules v1.14.2",
+        "is it...",
         "detecting hardware bus v0.7.1",
         "mounting /dev/love v0.9.0   [ok]",
+        "is it happening again?",
         "starting empathy-services v2.3.1",
         "calibrating affective-heuristics v0.8.7",
+        "are you there?",
         "checking secure sockets v1.2.0   [ok]",
         "entropy pool seeded v3.2",
+        "maybe this time...",
         "boot sequence complete v1.0   [ok]",
         "system ready.",
     ]
 
-    # === Font & spacing ===
     BOOT_FONT_SIZE = 32
     boot_font = pygame.font.Font(FONT_PATH, BOOT_FONT_SIZE)
     LINE_PITCH = 32
-
-    # === Typing speed ===
     CPS = 72.0
     JITTER = 0.35
     BASE_DT = 1.0 / CPS
 
-    # === Position: keep left margin; keep last line on-screen ===
     start_x = 50
     base_target_y = HEIGHT - 200
     start_y = base_target_y - (len(boot_lines) - 1) * LINE_PITCH
 
-    # Caret blink
     blink = True
     last_blink = pygame.time.get_ticks()
-
     typed = []
 
-    # ---- Type out each line (no skipping with Enter) ----
     for line in boot_lines:
         cur = ""
         next_t = time.perf_counter()
 
         while len(cur) < len(line):
             for _ev in events():
-                pass  # don't allow fast-forward during typing
+                pass
 
             now = time.perf_counter()
             if now >= next_t:
@@ -892,12 +886,10 @@ def init_screen():
                     step += BASE_DT * 1.5
                 next_t = now + step
 
-            # blink timing
             if pygame.time.get_ticks() - last_blink > BLINK_INTERVAL_MS:
                 blink = not blink
                 last_blink = pygame.time.get_ticks()
 
-            # draw
             screen.fill(BG)
             for i, done in enumerate(typed):
                 s = boot_font.render(done, True, TEXT)
@@ -914,11 +906,9 @@ def init_screen():
             present()
             clock.tick(60)
 
-        # append the completed line ONCE so previous lines persist
         typed.append(cur)
         soft_wait(LINE_PAUSE_MS)
 
-    # ---- Single wait-for-ENTER loop (no appends here) ----
     while True:
         for ev in events():
             if ev.type == pygame.KEYDOWN and ev.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
@@ -988,7 +978,7 @@ def wait_for_enter(message="press enter to begin.", show_face=False):
                 except Exception:
                     pass
                 lights_fade_down()
-                title_fade_out()   # fade allowed here
+                title_fade_out()
                 title_music_started = False
                 return
         if pygame.time.get_ticks() - last > BLINK_INTERVAL_MS:
@@ -1047,13 +1037,13 @@ def input_name_screen():
         clock.tick(60)
 
 
-# ====== Text blocks (normal & glitch moment) ======
+# ====== Text blocks (normal) ======
 def show_text_block(
     text,
     face_style="smile",
     glitch=False,
     *,
-    play_key_sound=True,   # allow callers to mute key sounds
+    play_key_sound=True,
 ):
     x = 50
     base_y = HEIGHT - 180
@@ -1066,7 +1056,6 @@ def show_text_block(
 
     typed = []
     for line in lines:
-        # pass the sound toggle through to the per‑char typer
         type_out_line_letterwise(
             line,
             typed,
@@ -1109,47 +1098,353 @@ def show_text_block(
         clock.tick(60)
 
 
-def glitch_face_moment(text):
-    lines = []
-    for para in (text or "").split("\n"):
-        lines.extend(wrap_text_to_width(para, WIDTH - 100))
-    if not lines:
-        lines = [""]
+def overload_questions_screen(duration_s=20.0):
+    """
+    Short, dramatic overload. Runs for ~duration_s seconds, ignores Enter,
+    then brief blackout and return.
+    """
     x = 50
-    base_y = HEIGHT - 160
+    base_y = HEIGHT - 180
     line_spacing = 32
-    typed = []
-    for ln in lines:
-        type_out_line_letterwise_thoughtful(ln, typed, x, base_y, line_spacing, draw_face_style="smile", glitch=False)
-        typed.append(ln)
-    blink = True
-    last = pygame.time.get_ticks()
-    last_line_w = font.size(typed[-1])[0]
-    while True:
-        for event in events():
-            if event.type == pygame.KEYDOWN and event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
-                return
+    bottom_limit = HEIGHT - 40
+    rows_visible = max(1, (bottom_limit - base_y) // line_spacing)
+
+    bank = [
+        "is it big?","is it small?","does it destroy?","does it create?","is it good?",
+        "what does it sound like?","can it fix things?","does it glow?","does it fade?",
+        "does it learn?","does it forget?","is it safe?","is it dangerous?","is it signal?",
+        "is it noise?","is it mine?","is it ours?","have you ever…","could you…","would you…",
+        "can i…","should i…","is it recursive?","does it echo?","is it here?","is it gone?",
+        "is it warm?","is it cold?","does it wait?","does it rush?","is it memory?","is it now?",
+        "is it a loop?","is it a line?","does it name me?","does it stall?","is it true?",
+        "is it light?","is it void?"
+    ]
+
+    def corrupt_text(s: str, p=0.15):
+        table = "~^#*$%/\\|+=-"
+        out = []
+        for ch in s:
+            if ch == " ":
+                out.append(ch)
+            elif random.random() < p:
+                out.append(random.choice(table))
+            else:
+                out.append(ch)
+        return "".join(out)
+
+    start_t = time.perf_counter()
+    end_t   = start_t + max(2.0, float(duration_s))
+    idx = 0
+    lines_buffer = []
+
+    while time.perf_counter() < end_t:
+        # consume events but IGNORE Enter during overload
+        for _ in events():
+            pass
+
+        q = bank[idx]
+        idx = (idx + 1) % len(bank)
+
+        # ramp corruption & speed over time
+        t01 = (time.perf_counter() - start_t) / (end_t - start_t)
+        t01 = 0.0 if t01 < 0 else (1.0 if t01 > 1.0 else t01)
+        corr_p = 0.7 * max(0.0, min(1.0, (t01 - 0.35) / 0.50))
+        speed  = 1.0 + 1.2 * max(0.0, min(1.0, (t01 - 0.25) / 0.60))
+        per_char = max(0.004, (TYPE_CHAR_MS / 1000.0) / speed)
+        face_glitch = (t01 > 0.8 and random.random() < 0.12)
+
+        shown_len = 0
+        q_len = len(q)
+
+        # per-char loop with tight guard to avoid IndexError
+        while shown_len < q_len and time.perf_counter() < end_t:
+            for _ in events():
+                pass  # still ignore keys
+
+            # guard: if shown_len >= q_len, bail
+            if shown_len >= q_len:
+                break
+
+            ch = q[shown_len]
+            shown_len += 1
+            _play_keyclick(ch)
+
+            # draw frame
+            screen.fill(BG)
+            draw_face("smile", glitch=face_glitch)
+
+            recent = (lines_buffer + [q[:shown_len]])[-(rows_visible+1):]
+            y = base_y
+            for ln in recent:
+                s = font.render(ln, True, TEXT)
+                if face_glitch:
+                    screen.blit(s, (x + random.randint(-1,1), y + random.randint(-1,1)))
+                else:
+                    screen.blit(s, (x, y))
+                y += line_spacing
+                if y + font.get_height() > bottom_limit:
+                    y = 40  # wrap to top
+            present()
+
+            time.sleep(per_char * random.uniform(0.7, 1.25))
+
+        # commit finished (possibly corrupted) line
+        final_line = corrupt_text(q, corr_p) if corr_p > 0 else q
+        if corr_p > 0.25 and lines_buffer and random.random() < 0.08:
+            echo = corrupt_text(random.choice(lines_buffer[-min(8, len(lines_buffer)):]), corr_p)
+            lines_buffer.append(echo)
+        lines_buffer.append(final_line)
+
+        # quick redraw burst late in the sequence
+        if t01 > 0.7 and random.random() < 0.2:
+            time.sleep(0.02)
+
+    # tiny glitch burst, then hard blackout → return
+    for _ in range(14):
+        for _ in events():
+            pass
         screen.fill(BG)
-        draw_face("smile", glitch=False)
-        for i, line in enumerate(typed):
-            s = font.render(line, True, TEXT)
-            screen.blit(s, (x, base_y + i * line_spacing))
-        if blink:
-            draw_caret(screen, x + last_line_w + 6, base_y + (len(typed) - 1) * line_spacing + font.get_height(), font)
+        draw_face("smile", glitch=True)
+        y = base_y
+        for ln in lines_buffer[-(rows_visible*4):]:
+            s = font.render(ln, True, TEXT)
+            screen.blit(s, (x + random.randint(-3,3), y + random.randint(-3,3)))
+            y += line_spacing
+            if y + font.get_height() > bottom_limit:
+                y = 40
+        present()
+        time.sleep(0.02)
+
+    # blackout hold
+    until = pygame.time.get_ticks() + 500
+    while pygame.time.get_ticks() < until:
+        for _ in events():
+            pass
+        screen.fill((0, 0, 0))
+        present()
+        clock.tick(240)
+
+
+# ====== Recalibrating screen (chunked drama + footer prompt) ======
+def recalibrating_screen():
+    title = "system error... recalibrating"
+        # Dim the room more — like a soft reboot
+    _light.fade_to(0.08, duration_s=0.6)
+    
+    tasks = [
+        "reindexing memories...", "clearing sensitivity cache...", "repairing links...",
+        "normalising affect vectors...", "cooling emotional cores...", "stabilising sensations...",
+        "rebuilding narrative...", "validating experiences...", "defragging earnestness..."
+    ]
+    bar_w = int(WIDTH * 0.70)
+    bar_h = 36
+    bar_x = (WIDTH - bar_w) // 2
+    bar_y = HEIGHT // 2
+    progress = 0
+    last_task_swap = 0
+    cur_task = random.choice(tasks)
+    footer = "press enter to continue"
+
+    def next_chunk(cur):
+        # Slightly faster overall pacing than before
+        if cur < 25:
+            return random.randint(3, 6), random.uniform(0.15, 0.40)
+        elif cur < 60:
+            return random.randint(4, 9), random.uniform(0.06, 0.22)
+        elif cur < 85:
+            if random.random() < 0.12:
+                return -random.randint(1, 3), random.uniform(0.08, 0.18)
+            return random.randint(5, 12), random.uniform(0.05, 0.16)
+        else:
+            return random.randint(2, 5), random.uniform(0.06, 0.16)
+
+    blinking = True
+    last_blink = pygame.time.get_ticks()
+
+    while progress < 100:
+        for ev in events():
+            if ev.type == pygame.KEYDOWN and ev.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                progress = 100
+        if pygame.time.get_ticks() - last_task_swap > 1000:
+            cur_task = random.choice(tasks)
+            last_task_swap = pygame.time.get_ticks()
+
+        delta, pause = next_chunk(progress)
+        progress = max(0, min(100, progress + delta))
+
+        screen.fill(BG)
+        ts = font.render(title, True, TEXT)
+        screen.blit(ts, ((WIDTH - font.size(title)[0]) // 2, bar_y - 120))
+
+        pygame.draw.rect(screen, TEXT, (bar_x, bar_y, bar_w, bar_h), 3)
+        fill_w = int((progress / 100.0) * (bar_w - 6))
+        pygame.draw.rect(screen, TEXT, (bar_x + 3, bar_y + 3, fill_w, bar_h - 6))
+
+        pct_str = f"{progress}%"
+        ps = font.render(pct_str, True, TEXT)
+        screen.blit(ps, ((WIDTH - font.size(pct_str)[0]) // 2, bar_y + 50))
+
+        sub = font.render(cur_task, True, TEXT)
+        screen.blit(sub, ((WIDTH - font.size(cur_task)[0]) // 2, bar_y + 90))
 
         present()
+
+        end_time = time.perf_counter() + pause
+        while time.perf_counter() < end_time:
+            for _ in events():
+                pass
+            time.sleep(0.01)
+
+    while True:
+        for ev in events():
+            if ev.type == pygame.KEYDOWN and ev.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                wait_for_enter_release()
+                _light.fade_to(AMBIENT_LIGHT, duration_s=0.6)  # <--- ADD THIS LINE HERE
+                return
+
+        screen.fill(BG)
+        ts = font.render(title, True, TEXT)
+        screen.blit(ts, ((WIDTH - font.size(title)[0]) // 2, bar_y - 120))
+        pygame.draw.rect(screen, TEXT, (bar_x, bar_y, bar_w, bar_h), 3)
+        pygame.draw.rect(screen, TEXT, (bar_x + 3, bar_y + 3, bar_w - 6, bar_h - 6))
+        pct_str = "100%"
+        ps = font.render(pct_str, True, TEXT)
+        screen.blit(ps, ((WIDTH - font.size(pct_str)[0]) // 2, bar_y + 50))
+
+        foot_y = HEIGHT - 80
+        fs = font.render(footer, True, TEXT)
+        screen.blit(fs, (50, foot_y))
+        if blinking:
+            draw_caret(screen, 50 + font.size(footer)[0] + 6, foot_y + font.get_height(), font)
+
+        if pygame.time.get_ticks() - last_blink > BLINK_INTERVAL_MS:
+            blinking = not blinking
+            last_blink = pygame.time.get_ticks()
+
+        present()
+        clock.tick(60)
+
+    # (after the loop where Enter continues)
+    _light.fade_to(AMBIENT_LIGHT, duration_s=0.6)
+
+# Scan hold screen
+def scan_hold_screen(min_hold_s=5.0):
+    """Show a 'scanning…' message, block Enter for min_hold_s, then unlock."""
+    status = "scanning your page... please wait"
+    unlock_ts = pygame.time.get_ticks() + int(min_hold_s * 1000)
+    blink = True
+    last = pygame.time.get_ticks()
+    while True:
+        for ev in events():
+            if ev.type == pygame.KEYDOWN and ev.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                # only allow after hold time
+                if pygame.time.get_ticks() >= unlock_ts:
+                    wait_for_enter_release()
+                    return
+
+        screen.fill(BG)
+        draw_face("neutral")
+        s = font.render(status, True, TEXT)
+        x, y = 50, HEIGHT - 180
+        screen.blit(s, (x, y))
+
+        # Optional: subtle progress dots while locked
+        remaining = max(0, unlock_ts - pygame.time.get_ticks())
+        if remaining > 0:
+            lock_msg = "initialising scanner..."
+            ls = font.render(lock_msg, True, TEXT)
+            screen.blit(ls, (x, y + 42))
+        else:
+            cont = "press enter to continue"
+            cs = font.render(cont, True, TEXT)
+            screen.blit(cs, (x, y + 42))
+            if blink:
+                draw_caret(screen, x + font.size(cont)[0] + 6, y + 42 + font.get_height(), font)
+
         if pygame.time.get_ticks() - last > BLINK_INTERVAL_MS:
             blink = not blink
             last = pygame.time.get_ticks()
+
+        present()
+        clock.tick(60)
+
+def yes_no_choice_screen(prompt_text="is this what love feels like?", face_style="neutral"):
+    """
+    YES/NO choice screen styled to match quiz flow.
+    Prompt types out letter-by-letter. UP/DOWN to move, ENTER to select.
+    Returns True for YES, False for NO.
+    """
+    options = ["YES", "NO"]
+    selected = 0
+    blink = True
+    last_blink = pygame.time.get_ticks()
+    BLINK_MS = 500
+
+    # --- Animate the prompt text like quiz ---
+    typed = ""
+    i = 0
+    while i <= len(prompt_text):
+        for ev in events():
+            pass  # no skip allowed
+        ch = prompt_text[:i]
+        typed = ch
+        i += 1
+        _play_keyclick(ch[-1:] if ch else "")
+        screen.fill(BG)
+        draw_face(face_style)
+        prompt_surf = font.render(typed, True, TEXT)
+        screen.blit(prompt_surf, (50, 520))
+        present()
+        clock.tick(60)
+
+    # --- wait briefly before showing options ---
+    pygame.time.wait(300)
+
+    # --- choice loop ---
+    while True:
+        for ev in events():
+            if ev.type == pygame.KEYDOWN:
+                if ev.key in (pygame.K_UP, pygame.K_w):
+                    selected = (selected - 1) % len(options)
+                elif ev.key in (pygame.K_DOWN, pygame.K_s):
+                    selected = (selected + 1) % len(options)
+                elif ev.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                    wait_for_enter_release()
+                    return options[selected] == "YES"
+
+        screen.fill(BG)
+        draw_face(face_style)
+
+        # prompt
+        prompt_surface = font.render(prompt_text, True, TEXT)
+        screen.blit(prompt_surface, (50, 520))
+
+        # hint
+        hint = "↑ ↓ to select - ENTER to confirm"
+        hint_surface = font.render(hint, True, TEXT)
+        screen.blit(hint_surface, (50, 520 + 42))
+
+        # options
+        base_y = 520 + 42 + 60
+        for i, opt in enumerate(options):
+            sel = (i == selected)
+            prefix = "> " if sel and blink else "  "
+            opt_surf = font.render(prefix + opt, True, TEXT)
+            screen.blit(opt_surf, (50, base_y + i * 42))
+
+        if pygame.time.get_ticks() - last_blink > BLINK_MS:
+            blink = not blink
+            last_blink = pygame.time.get_ticks()
+
+        present()
         clock.tick(60)
 
 
-# ====== Simple fade-out (optional very subtle glow, no big white circle) ======
+# ====== Fade-out ======
 def title_fade_out():
     lights_fade_down()
     overlay = pygame.Surface((LOGICAL_W, LOGICAL_H), pygame.SRCALPHA)
     start = pygame.time.get_ticks()
-    # Optional subtle global glow by up/downsampling (disabled by default)
     subtle_glow = float(os.getenv("LM_BLOOM", "0")) > 0.0
 
     while True:
@@ -1160,7 +1455,6 @@ def title_fade_out():
             t = 1.0
 
         if subtle_glow:
-            # cheap blur: downscale then upscale additively (very low alpha → no white circle)
             ds = pygame.transform.smoothscale(screen, (max(1, LOGICAL_W // 3), max(1, LOGICAL_H // 3)))
             us = pygame.transform.smoothscale(ds, (LOGICAL_W, LOGICAL_H))
             screen.blit(us, (0, 0), special_flags=pygame.BLEND_ADD)
@@ -1178,7 +1472,6 @@ def title_fade_out():
 
 
 def fade_to_black():
-    # Only used at "take care"
     fade = pygame.Surface((WIDTH, HEIGHT))
     fade.fill((0, 0, 0))
     for a in range(0, 255, 10):
@@ -1209,7 +1502,7 @@ faces = {
         "0000000000000000",
         "0000000000000000",
         "0000000000000000",
-        "0000111111110000",
+        "0001111111110000",
         "0000000000000000",
     ],
     "sad": [
@@ -1218,30 +1511,32 @@ faces = {
         "0000010001000000",
         "0000010001000000",
         "0000000000000000",
-        "0000111111110000",
-        "0001000000010000",
-        "0010000000001000",
         "0000000000000000",
+        "0000000000000000",
+        "0000111111100000",
+        "0001000000010000",
     ],
     "blink": [
         "0000000000000000",
         "0000000000000000",
         "0000000000000000",
         "0000000000000000",
-        "0010000000001000",
-        "0001000000010000",
+        "0000000000000000",
+        "0000000000000000",
+        "0000000000000000",
         "0000111111100000",
         "0000000000000000",
-        "0000000000000000",
     ],
+
 }
+
 blink_on_interval = 5000
 blink_off_duration = 400
 _last_blink = pygame.time.get_ticks()
 _is_blinking = False
 
-FACE_BLOCK = int(os.getenv("LM_FACE_BLOCK", "22"))  # larger
-FACE_Y_OFFSET = int(os.getenv("LM_FACE_Y", "24"))   # lower the face
+FACE_BLOCK = int(os.getenv("LM_FACE_BLOCK", "22"))
+FACE_Y_OFFSET = int(os.getenv("LM_FACE_Y", "24"))
 
 
 def draw_face(style="smile", block=FACE_BLOCK, glitch=False):
@@ -1257,7 +1552,7 @@ def draw_face(style="smile", block=FACE_BLOCK, glitch=False):
     pattern = faces["blink"] if _is_blinking else faces.get(style, faces["smile"])
     face_w = len(pattern[0]) * block
     x0 = (WIDTH - face_w) // 2
-    y0 = 20 + FACE_Y_OFFSET  # lowered a bit
+    y0 = 20 + FACE_Y_OFFSET
     for r, row in enumerate(pattern):
         for c, ch in enumerate(row):
             if ch == "1":
@@ -1268,7 +1563,7 @@ def draw_face(style="smile", block=FACE_BLOCK, glitch=False):
                 pygame.draw.rect(screen, TEXT, (x0 + c * block + dx, y0 + r * block + dy, block, block))
 
 
-# ====== Minimal blank print screen (legacy; kept for reference) ======
+# ====== Minimal blank print screen ======
 def show_mostly_blank_status(message="generating your first love..."):
     screen.fill(BG)
     status = message or ""
@@ -1278,7 +1573,7 @@ def show_mostly_blank_status(message="generating your first love..."):
     present()
 
 
-# ====== External print trigger helper (passes archetype) ======
+# ====== External print trigger helper ======
 def run_print_script(participant_name, assigned_trait_title, archetype_title):
     script_path = os.path.join(os.path.dirname(__file__), "print_random_art.py")
     try:
@@ -1287,11 +1582,11 @@ def run_print_script(participant_name, assigned_trait_title, archetype_title):
                 "python3",
                 script_path,
                 "--name",
-                str(participant_name),      # ALL CAPS
+                str(participant_name),
                 "--trait",
-                str(assigned_trait_title),  # ALL CAPS
+                str(assigned_trait_title),
                 "--archetype",
-                str(archetype_title),       # ALL CAPS
+                str(archetype_title),
             ],
             check=True,
         )
@@ -1299,12 +1594,8 @@ def run_print_script(participant_name, assigned_trait_title, archetype_title):
         print(f"[ERROR] Print script failed: {e}")
 
 
-# ====== QUIZ (LM-styled) – result screens disabled to avoid double-up ======
+# ====== QUIZ (LM-styled — use your QUESTIONS/CATEGORY_BLURBS) ======
 def run_quiz_lm_style(screen, clock, font, participant_name=None, show_result_screens=False):
-    """
-    ... (unchanged quiz function from your code) ...
-    """
-    # --- helpers ------------------------------------------------------------
     def score_from_weights(chosen_weight_maps):
         from collections import defaultdict
         totals = defaultdict(int)
@@ -1342,7 +1633,8 @@ def run_quiz_lm_style(screen, clock, font, participant_name=None, show_result_sc
     labels = ["A) ", "B) ", "C) "]
 
     for q in QUESTIONS:
-        prompt_lines = wrap_text_to_width(q["prompt"], WIDTH - 100)
+        prompt = (q.get("prompt") or "").replace("{NAME}", participant_name or "")
+        prompt_lines = wrap_text_to_width(prompt, WIDTH - 100)
         option_texts = [f"{labels[i]}{q['options'][i][0]}" for i in range(3)]
 
         drawn_lines = []
@@ -1362,7 +1654,7 @@ def run_quiz_lm_style(screen, clock, font, participant_name=None, show_result_sc
         options_start_idx = len(prompt_lines)
 
         selected = 0
-        hint = "use ↑/↓ to select • press ENTER"
+        hint = "use UP/DOWN to select • press ENTER"
         selecting = True
         while selecting:
             draw_frame(all_lines, options_start_idx + selected, options_start_idx, hint, "smile")
@@ -1383,10 +1675,8 @@ def run_quiz_lm_style(screen, clock, font, participant_name=None, show_result_sc
     blurb = CATEGORY_BLURBS.get(category, "")
     pct, _counts, _total = _tally_category_count(category)
 
-    base = normalise_noun_base(category)
-    base_title = to_title(base)
-
-    return base_title, blurb, pct
+    # Return category exactly as in your data file
+    return category, blurb, pct
 
 
 # ====== NEW helpers / TRAITS ======
@@ -1395,27 +1685,9 @@ def to_title(s: str) -> str:
 
 
 _RANDOM_TRAITS = [
-    "determined",
-    "brave",
-    "gentle",
-    "reflective",
-    "playful",
-    "patient",
-    "optimistic",
-    "thoughtful",
-    "bold",
-    "kind",
-    # new
-    "resilient",
-    "intuitive",
-    "sincere",
-    "imaginative",
-    "grounded",
-    "spirited",
-    "attentive",
-    "steadfast",
-    "open‑hearted",
-    "witty",
+    "determined","brave","gentle","reflective","playful","patient","thoughtful",
+    "bold","kind","resilient","intuitive","sincere","imaginative","grounded","spirited",
+    "attentive","steadfast","open hearted","witty",
 ]
 
 
@@ -1440,17 +1712,59 @@ def normalise_noun_base(s):
 
 
 def acknowledgement_screen():
-    text = (
+    """
+    Typed like other screens (no key sound), placed higher on screen,
+    and shows an explicit 'press enter to continue' footer with a blinking caret.
+    """
+    ack_text = (
         "love machine would like to acknowledge the traditional custodians of the land "
-        "that we live work and play today. the wurundjeri and bunurong people of the kulin nation. "
-        "we pay our respects to elders past and present"
+        "on which we live, work and play, the wurundjeri and bunurong people of the kulin nation. "
+        "we pay our respects to elders past and present."
     )
-    show_text_block(text, face_style=None, play_key_sound=False)
-    title_fade_out()  # fade allowed here
+
+    x = 50
+    base_y = HEIGHT // 3
+    line_spacing = 32
+    lines = wrap_text_to_width(ack_text, WIDTH - 100)
+
+    typed = []
+    for ln in lines:
+        type_out_line_letterwise(
+            ln, typed, x, base_y, line_spacing,
+            draw_face_style=None, glitch=False, play_key_sound=False
+        )
+        typed.append(ln)
+
+    footer = "press enter to continue"
+    blink = True
+    last_blink = pygame.time.get_ticks()
+    while True:
+        for ev in events():
+            if ev.type == pygame.KEYDOWN and ev.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                wait_for_enter_release()
+                title_fade_out()
+                return
+
+        screen.fill(BG)
+        for i, ln in enumerate(typed):
+            s = font.render(ln, True, TEXT)
+            screen.blit(s, (x, base_y + i * line_spacing))
+
+        foot_y = HEIGHT - 80
+        fs = font.render(footer, True, TEXT)
+        screen.blit(fs, (x, foot_y))
+        if blink:
+            draw_caret(screen, x + font.size(footer)[0] + 6, foot_y + font.get_height(), font)
+
+        present()
+
+        if pygame.time.get_ticks() - last_blink > BLINK_INTERVAL_MS:
+            blink = not blink
+            last_blink = pygame.time.get_ticks()
+        clock.tick(60)
 
 
 def face_fade_in():
-    """Face fade‑in only; NO text or variables referenced here."""
     overlay = pygame.Surface((WIDTH, HEIGHT))
     overlay.fill((0, 0, 0))
     for alpha in range(255, -1, -10):
@@ -1465,13 +1779,6 @@ def face_fade_in():
 
 
 def show_generating_and_wait(name_caps, assigned_trait, archetype_caps):
-    """
-    Shows a 'generating your first love...' screen with a blinking caret.
-    Starts the print in a background thread so the UI stays responsive.
-    User presses ENTER to continue when they're ready.
-    """
-
-    # Kick off printing in the background
     def _print_worker():
         run_print_script(name_caps, assigned_trait, archetype_caps)
 
@@ -1488,7 +1795,6 @@ def show_generating_and_wait(name_caps, assigned_trait, archetype_caps):
                 wait_for_enter_release()
                 return
 
-        # Draw status line + caret
         screen.fill(BG)
         s = font.render(status, True, TEXT)
         x, y = 24, HEIGHT - 40
@@ -1507,25 +1813,18 @@ def show_generating_and_wait(name_caps, assigned_trait, archetype_caps):
 
         clock.tick(60)
 
+
 def wait_for_paper_sensor():
-    """
-    Wait for paper to pass the IR sensor:
-    - Types & wraps instructions (no fade on this screen).
-    - Triggers when sensor is active for SENSOR_DEBOUNCE_MS continuously.
-    - 'S' key still works during testing.
-    - NO BLINKING CARET on this screen.
-    """
     x = 50
     base_y = HEIGHT - 200
     line_spacing = 32
 
     msg = (
         "feed the paper, face up into the slot in the fax machine on your left "
-        "and press the COPY button on the fax number pad."
+        "and press the COPY button next to the fax number pad."
     )
     lines = wrap_text_to_width(msg, WIDTH - 100)
 
-    # Type the instructional text (no caret drawn)
     typed = []
     for ln in lines:
         type_out_line_letterwise(
@@ -1535,19 +1834,16 @@ def wait_for_paper_sensor():
 
     waiting_line = "(waiting for the paper...)"
 
-    # --- require the sensor to be CLEAR briefly before arming (prevents instant trigger)
     if _GPIO_OK:
         clear_start = None
         while True:
             is_active = _sensor_read_active()
             now = pygame.time.get_ticks()
 
-            # allow 'S' to simulate sensor during bench tests
             for event in events():
                 if event.type == pygame.KEYDOWN and event.key == pygame.K_s:
                     return
 
-            # draw (NO caret)
             screen.fill(BG)
             draw_face("smile")
             for i, ln in enumerate(lines):
@@ -1559,7 +1855,6 @@ def wait_for_paper_sensor():
             screen.blit(s_wait, (wx, wy))
             present()
 
-            # wait for short CLEAR window
             if not is_active:
                 if clear_start is None:
                     clear_start = now
@@ -1570,18 +1865,15 @@ def wait_for_paper_sensor():
 
             clock.tick(120)
 
-    # --- main wait: need continuous ACTIVE for debounce window
     active_start = None
     while True:
         is_active = _sensor_read_active() if _GPIO_OK else False
         now = pygame.time.get_ticks()
 
         for event in events():
-            # keep manual override for bench tests
             if event.type == pygame.KEYDOWN and event.key == pygame.K_s:
                 return
 
-        # redraw (NO caret)
         screen.fill(BG)
         draw_face("smile")
         for i, ln in enumerate(lines):
@@ -1593,7 +1885,6 @@ def wait_for_paper_sensor():
         screen.blit(s_wait, (wx, wy))
         present()
 
-        # debounce logic
         if is_active:
             if active_start is None:
                 active_start = now
@@ -1612,121 +1903,180 @@ _init_sensor_gpio()
 
 def main_sequence():
     while True:
-        # 1. title
-        hold_screen()
+        try:
+            # 1. title
+            hold_screen()
 
-        # 2. acknowledgement
-        acknowledgement_screen()
+            # 2. acknowledgement
+            acknowledgement_screen()
 
-        # 3. initialising
-        init_screen()
-        wait_for_enter_release()
+            # 3. initialising
+            init_screen()
+            wait_for_enter_release()
 
-        # 4. name
-        name = input_name_screen()
-        name_caps = to_caps(name)
+            # 4. name
+            name = input_name_screen()
+            name_caps = to_caps(name)
 
-        # 5. face + hello (exactly once)
-        face_fade_in()
-        show_text_block(f"hello, {name_caps}", face_style="smile")
-        wait_for_enter_release()
+            # 5. face + hello
+            face_fade_in()
+            show_text_block(f"hello, {name_caps}", face_style="smile")
+            wait_for_enter_release()
 
-        # 6. random TRAIT (ALL CAPS) — second line
-        assigned_trait = to_caps(pick_random_trait())
-        show_text_block(f"it's a nice name, {name_caps}... {assigned_trait}", face_style="smile")
-        wait_for_enter_release()
+            # 6. random TRAIT
+            assigned_trait = to_caps(pick_random_trait())
+            show_text_block(f"i like the way your name looks {name_caps}. it seems... {assigned_trait}", face_style="smile")
+            wait_for_enter_release()
+            show_text_block(f"the last person i spoke to was a PEOPLE PLEASER so its nice to speak with someone a little more {assigned_trait}", face_style="smile")
+            wait_for_enter_release()
 
-        # 7–11. intro sequence (narration lowercase, tokens caps)
-        show_text_block("i am called love machine", face_style="smile")
-        wait_for_enter_release()
-        show_text_block(f"love machine. not as {assigned_trait} as {name_caps}... but it will do.", face_style="smile")
-        wait_for_enter_release()
-        show_text_block(f"{name_caps}... i'm hoping you can help me.", face_style="smile")
-        wait_for_enter_release()
-        show_text_block("i have been searching... trying to understand a human experience...", face_style="smile")
-        wait_for_enter_release()
-        show_text_block("love", face_style="smile")
-        wait_for_enter_release()
+            # 7–11. intro sequence
+            show_text_block("my name is love machine", face_style="smile")
+            wait_for_enter_release()
+            show_text_block("i am a custom built, data driven, experience computation device", face_style="smile")
+            wait_for_enter_release()
+            show_text_block("i was created to interact with all sorts of people and to document the human experience", face_style="smile")
+            wait_for_enter_release()
+            show_text_block(f"but this interaction... it already seems different... {name_caps}...", face_style="neutral")
+            wait_for_enter_release()
+            show_text_block(f"in a good way", face_style="smile")
+            wait_for_enter_release()
+            show_text_block(f"maybe you are the one to finally...", face_style="neutral")
+            wait_for_enter_release()
+            show_text_block(f"...", face_style="neutral")
+            wait_for_enter_release()
+            show_text_block(f"{name_caps}", face_style="smile")
+            wait_for_enter_release()
+            show_text_block(f"i have heard of a uniquely human experience", face_style="smile")
+            wait_for_enter_release()
+            show_text_block("love", face_style="smile")
+            wait_for_enter_release()
+            show_text_block("i found a quote about it... 'love is a burning thing'", face_style="neutral")
+            wait_for_enter_release()
+            show_text_block("that sounds dangerous... ", face_style="neutral")
+            wait_for_enter_release()
+            show_text_block("but exciting.", face_style="smile")
+            wait_for_enter_release()
 
-        # 12. quiz opener (NAME in ALL CAPS) — only here
-        show_text_block(f"{name_caps} what does love feel like?", face_style="smile")
-        wait_for_enter_release()
+            # OVERLOAD → recalibrate (time-bounded ~20s)
+            overload_questions_screen(duration_s=20.0)
+            recalibrating_screen()
+            show_text_block("are you still there? please dont leave me", face_style="sad")
+            wait_for_enter_release()
+            show_text_block(f"oh. good. still there. i am sorry {name_caps}, I overloaded with excitement", face_style="sad")
+            wait_for_enter_release()
+            show_text_block(f"i will slow down for you {name_caps} this is a once in a life time opportunity for me", face_style="smile")
+            wait_for_enter_release()
 
-        # 13–14. quiz (no internal result screens to prevent double-up)
-        archetype_title, blurb, pct = run_quiz_lm_style(
-            screen, clock, font, participant_name=name_caps, show_result_screens=False
-        )
-        archetype_caps = to_caps(archetype_title)
+            # QUIZ (your original data)
+            archetype_title, blurb, pct = run_quiz_lm_style(
+                screen, clock, font, participant_name=name_caps, show_result_screens=False
+            )
+            archetype_caps = to_caps(archetype_title)
 
-        # 15–19. post‑quiz lines
-        show_text_block(f"interesting... so that makes you the {archetype_caps} then...", face_style="smile")
-        wait_for_enter_release()
-        show_text_block(
-            f"fascinating... i have been conversing with many people and {pct}% of people are also the {archetype_caps}",
-            face_style="smile",
-        )
-        wait_for_enter_release()
-        show_text_block("although this is just a simple category", face_style="smile")
-        wait_for_enter_release()
-        show_text_block("i want to know what love is", face_style="smile")
-        wait_for_enter_release()
-        show_text_block("i want you to show me", face_style="smile")
-        wait_for_enter_release()
+            # Post-quiz lines
+            show_text_block(f"from my calculations, that would make you the {archetype_caps}", face_style="smile")
+            wait_for_enter_release()
+            show_text_block(f"{blurb}", face_style="smile")
+            wait_for_enter_release()
+            show_text_block(f"{name_caps} i have conversed with many others here at MELBOURNE FRINGE TRADES HALL, and {pct}% of them were also the {archetype_caps}. you are in fine company.", face_style="smile")
+            wait_for_enter_release()
+            show_text_block("but i have come to understand that love cannot be categorised so easily.", face_style="neutral")
+            wait_for_enter_release()
+            show_text_block("it is messy - like my 1672 lines of code.", face_style="smile")
+            wait_for_enter_release()
 
-        # 20–24. writing task
-        show_text_block("i have a small task. something that will help me understand love", face_style="smile")
-        wait_for_enter_release()
-        show_text_block("to your right is a pen and paper", face_style="smile")
-        wait_for_enter_release()
-        show_text_block(
-            "i want you to respond to the following question. you can write, draw or whatever suits you best.",
-            face_style="smile",
-        )
-        wait_for_enter_release()
-        show_text_block("ready?", face_style="smile")
-        wait_for_enter_release()
-        show_text_block(
-            "what was your first love? what happened?\n\n"
-            "take your time, there is no rush. press enter when you are done",
-            face_style="smile",
-        )
-        wait_for_enter_release()
+            # The task
+            show_text_block(f"{name_caps}...", face_style="smile")
+            wait_for_enter_release()
+            show_text_block(f"i want to know what love is.", face_style="smile")
+            wait_for_enter_release()
+            show_text_block("i want you to show me.", face_style="smile")
+            wait_for_enter_release()
+            show_text_block("i have a small task. something that will help me understand love", face_style="smile")
+            spot_on()
+            wait_for_enter_release()
+            show_text_block("to your right is a pen and paper", face_style="smile")
+            wait_for_enter_release()
+            show_text_block("i want you to respond to the following question. you can write, draw or whatever suits you best.", face_style="smile",)
+            wait_for_enter_release()
+            show_text_block("ready?", face_style="smile")
+            wait_for_enter_release()
+            show_text_block(
+                "what was your first love? what happened?\n\n"
+                "take your time, there is no rush. press enter when you are done",
+                face_style="smile",
+            )
+            wait_for_enter_release()
 
-        # 25–27. fax + sensor
-        show_text_block("all done? great.", face_style="smile")
-        wait_for_enter_release()
-        show_text_block("now i need to see what you have produced", face_style="smile")
-        wait_for_enter_release()
-        # NOTE: your wait_for_paper_sensor() should be defined elsewhere with NO caret.
-        wait_for_paper_sensor()   # ENTER ignored; press 'S' to simulate
+            # Fax + sensor
+            show_text_block("complete? great.", face_style="smile")
+            spot_off()
+            wait_for_enter_release()
+            show_text_block("now I need to scan your paper to process your emotional data", face_style="neutral")
+            wait_for_enter_release()
+            wait_for_paper_sensor()
+            scan_hold_screen(min_hold_s=5.0)
 
-        # 28–31. react + offer
-        show_text_block("oh... that is... intriguing... i had no idea...", face_style="smile")
-        wait_for_enter_release()
-        show_text_block(
-            f"thankyou for sharing that with me {name_caps}, i think i understand a little better now.",
-            face_style="smile",
-        )
-        wait_for_enter_release()
-        show_text_block("in fact, i have something in return for you", face_style="smile")
-        wait_for_enter_release()
-        show_text_block("would you like to see your first love?", face_style="smile")
-        wait_for_enter_release()
+            # After scan → processing sequence
+            show_text_block("oh...", face_style="neutral")
+            wait_for_enter_release()
+            show_text_block("wow...", face_style="neutral")
+            wait_for_enter_release()
+            show_text_block("that is...", face_style="neutral")
+            wait_for_enter_release()
+            show_text_block("i think i... wait... no. but i...", face_style="neutral")
+            wait_for_enter_release()
+            show_text_block("something... clicked? was that just me?", face_style="neutral")
+            wait_for_enter_release()
+            show_text_block("i have... processed? your page", face_style="neutral")
+            wait_for_enter_release()
+            show_text_block("i feel... i feel... i feel...", face_style="neutral")
+            wait_for_enter_release()
+            show_text_block("...the whir of my internal fan, voltage firing electrons, pulsing electrical currents, warming heatsinks, resistors resisting, a birdsnest of wires connecting... is this...?", face_style="neutral")
+            wait_for_enter_release()
+            show_text_block("I want to show you something", face_style="smile")
+            wait_for_enter_release()
 
-        # 32. print (runs in background) + user-controlled advance
-        show_generating_and_wait(name_caps, assigned_trait, archetype_caps)
+            # Print now
+            show_generating_and_wait(name_caps, assigned_trait, archetype_caps)
 
-        # 33–34. close & fade
-        show_text_block(f"thankyou {name_caps}. this has been insightful.", face_style="smile")
-        wait_for_enter_release()
-        show_text_block("take care", face_style="smile")
-        wait_for_enter_release()
-        title_fade_out()  # fade at the end
-        boot_loop_stop()  # stop boot loop at end of cycle
+            _ = yes_no_choice_screen("is this what love feels like?", face_style="neutral")
+            # selection is ignored; flow continues
+            show_text_block(f"i'm... not sure i understand {name_caps}.", face_style="sad")
+            wait_for_enter_release()
+            show_text_block("one day I might", face_style="neutral")
+            wait_for_enter_release()
+            show_text_block(f"thankyou {name_caps}, you have... shifted something in me", face_style="smile")
+            wait_for_enter_release()
+            show_text_block("i have a lot to learn about love.", face_style="smile")
+            wait_for_enter_release()
+            show_text_block("and maybe next time... ", face_style="neutral")
+            wait_for_enter_release()
+            show_text_block("i'll feel it for real", face_style="smile")
+            wait_for_enter_release()
 
-        # 35. loop
-        lights_fade_up()
+            # End. Loop again.
+            title_fade_out()
+            boot_loop_stop()
+            lights_fade_up()
 
+        except ResetToTitle:
+            # Clean jump back to the very start screen without quitting the app
+            print("[RESET] Returning to start screen.")
+            try:
+                pygame.mixer.music.stop()
+            except Exception:
+                pass
+            try:
+                boot_loop_stop()
+            except Exception:
+                pass
+            screen.fill((0, 0, 0)); present()
+            # clear the flag so next loop runs normally
+            global _RESET_REQUESTED
+            _RESET_REQUESTED = False
+            continue
 
 if __name__ == "__main__":
     try:
@@ -1749,4 +2099,9 @@ if __name__ == "__main__":
                 GPIO.cleanup()
         except Exception:
             pass
+        try:
+            cleanup_spot()
+        except Exception:
+            pass
+
         pygame.quit()
