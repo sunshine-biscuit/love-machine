@@ -3,35 +3,52 @@
 
 QUESTIONS = [
     {
-        "prompt": "What does love feel like?",
+        "prompt": "what does love feel like?",
         "options": [
-            ("A warm summer day", {"OPTIMIST": 2, "ROMANTIC": 1}),
-            ("Butterflies",        {"ROMANTIC": 2, "CURIOUS": 1}),
-            ("Torture",            {"CYNIC": 2, "REALIST": 1}),
+            ("a warm glow",         {"OPTIMIST": 2, "ROMANTIC": 1}),
+            ("an overclocked fan",  {"SEEKER": 2, "ROMANTIC": 1}),
+            ("an unexpected error", {"CYNIC": 2, "REALIST": 1}),
         ],
     },
     {
-        "prompt": "How risky is love?",
+        "prompt": "how do you know that it is love?",
         "options": [
-            ("Worth every risk", {"OPTIMIST": 2, "ROMANTIC": 1}),
-            ("A calculated leap",{"REALIST": 2, "CURIOUS": 1}),
-            ("A trap",           {"CYNIC": 2}),
+            ("the brightness stays at 100%", {"OPTIMIST": 2, "ROMANTIC": 1}),
+            ("it is saved to memory",        {"REALIST": 2, "SEEKER": 1}),
+            ("i exit the window asap",            {"CYNIC": 2}),
         ],
     },
     {
-        "prompt": "Pick a symbol:",
+        "prompt": "if you delete someone from memory... is the love gone?",
         "options": [
-            ("Sunrise",  {"OPTIMIST": 2}),
-            ("Key",      {"CURIOUS": 2, "REALIST": 1}),
-            ("Mask",     {"CYNIC": 1, "ROMANTIC": 1}),
+            ("never. it is hard coded",           {"ROMANTIC": 1, "OPTIMIST": 1}),  
+            ("traces will always remain",        {"SEEKER": 2, "REALIST": 1}),
+            ("the name is gone. the ache survives", {"CYNIC": 2, "REALIST": 1}),
+        ],
+    },
+    {
+        "prompt": "why does it still hurt even after it is over?",
+        "options": [
+            ("the memory is golden",  {"OPTIMIST": 1}),            
+            ("the memory loops forever", {"SEEKER": 2, "REALIST": 1}),
+            ("the memory never stops", {"ROMANTIC": 2}),           
+        ],
+    },
+    {
+        "prompt": "how do you know it is real?",
+        "options": [
+            ("it changes how the world feels", {"OPTIMIST": 2, "ROMANTIC": 1}),
+            ("it returns even when uncalled",  {"REALIST": 2, "SEEKER": 1}),
+            ("it crashes everything that comes after", {"CYNIC": 2, "ROMANTIC": 1}),
         ],
     },
 ]
 
+
 CATEGORY_BLURBS = {
     "OPTIMIST": "You lean into hope. You believe love turns gears.",
     "ROMANTIC": "You chase the spark. You like the way it glows.",
-    "CURIOUS":  "You examine the edges and step forward anyway.",
+    "SEEKER": 	"Your heart maps constellations to understand the code.",
     "REALIST":  "You keep your feet on the ground and your heart online.",
-    "CYNIC":    "You’ve met love before and kept the receipt.",
+    "CYNIC":    "You have met love before and kept the receipt.",
 }
