@@ -1,4 +1,8 @@
 {
-  "total": 0,
-  "categories": {}
+  "total": 4,
+  "categories": {
+    "OPTIMIST": 1,
+    "SEEKER": 2,
+    "ROMANTIC": 1
+  }
 }

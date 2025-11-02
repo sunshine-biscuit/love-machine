@@ -97,7 +97,7 @@ def _init_keyclick():
             _init_audio()
         if os.path.isfile(KEYCLICK_PATH):
             KEYCLICK_SND = pygame.mixer.Sound(KEYCLICK_PATH)
-            KEYCLICK_SND.set_volume(0.2)  # adjust to taste
+            KEYCLICK_SND.set_volume(0.65)  # adjust to taste
         base = 3  # channels 3–5 kept for clicks; 7 is boot loop
         _KEYCLICK_CHS = [pygame.mixer.Channel(base + i) for i in range(3)]
     except Exception as e:
@@ -381,66 +381,13 @@ def _init_boot_sound():
         print(f"[WARN] Boot loop init failed: {e}")
         return False
 
-# ====== Snap cut + fade restore for ambient (BOOT_CH) ======
-_BOOT_PRE_DUCK_VOL = None  # remember level from before the cut/fade
-
-def _get_boot_vol():
-    try:
-        if BOOT_CH:
-            return BOOT_CH.get_volume()
-    except Exception:
-        pass
-    return None
-
-def _set_boot_vol(vol: float):
-    v = max(0.0, min(1.0, float(vol)))
-    try:
-        if BOOT_CH:
-            BOOT_CH.set_volume(v)
-    except Exception:
-        pass
-
-def audio_cut(target=0.0):
-    """Instantly set ambient to target (e.g., 0.0 = mute), remembering the prior volume."""
-    global _BOOT_PRE_DUCK_VOL
-    pre = _get_boot_vol()
-    if pre is None:
-        pre = 0.12  # sensible default if channel not initialised yet
-    _BOOT_PRE_DUCK_VOL = pre
-    _set_boot_vol(target)
-    # keep music in sync if you ever use pygame.mixer.music for ambients
-    try:
-        pygame.mixer.music.set_volume(target)
-    except Exception:
-        pass
-
-def audio_restore(fade_ms=1000):
-    """Fade ambient back up to the volume from before the last cut."""
-    global _BOOT_PRE_DUCK_VOL
-    cur = _get_boot_vol()
-    if cur is None:
-        cur = 0.0
-    target = _BOOT_PRE_DUCK_VOL if _BOOT_PRE_DUCK_VOL is not None else 0.12
-    steps = max(1, int(fade_ms / 30))
-    for i in range(steps + 1):
-        t = i / steps
-        _set_boot_vol(cur + (target - cur) * t)
-        time.sleep(fade_ms / 1000.0 / steps)
-    _BOOT_PRE_DUCK_VOL = None
-    # (optional) if music channel is used elsewhere
-    try:
-        pygame.mixer.music.set_volume(target)
-    except Exception:
-        pass
-
-
 
 def boot_loop_start(vol=1.0):
     if BOOT_SOUND is None or BOOT_CH is None:
         if not _init_boot_sound():
             return
     try:
-        BOOT_SOUND.set_volume(max(0.0, min(0.15, vol)))
+        BOOT_SOUND.set_volume(max(0.0, min(1.0, vol)))
         BOOT_CH.play(BOOT_SOUND, loops=-1, fade_ms=300)
     except Exception as e:
         print(f"[WARN] Boot loop start failed: {e}")
@@ -883,7 +830,7 @@ def typewriter_boot_screen(
 
 
 def init_screen():
-    boot_loop_start(vol=0.4)
+    boot_loop_start(vol=0.6)
 
     # Scattered “Is it…” lines among normal lines
     boot_lines = [
@@ -998,7 +945,7 @@ def wait_for_enter(message="press enter to begin.", show_face=False):
             if not _music_ready:
                 if not _load_title_music():
                     raise RuntimeError("Startup music not available (see earlier error).")
-            pygame.mixer.music.set_volume(0.15)
+            pygame.mixer.music.set_volume(0.8)
             pygame.mixer.music.play(loops=-1, fade_ms=2500)
             lights_fade_up()
             title_music_started = True
@@ -1286,11 +1233,9 @@ def overload_questions_screen(duration_s=20.0):
 # ====== Recalibrating screen (chunked drama + footer prompt) ======
 def recalibrating_screen():
     title = "system error... recalibrating"
-
-    # Hard mute the ambient for the “overload” moment
-    audio_cut(0.0)
-
-    # ---- progress bar + task text ----
+        # Dim the room more — like a soft reboot
+    _light.fade_to(0.08, duration_s=0.6)
+    
     tasks = [
         "reindexing memories...", "clearing sensitivity cache...", "repairing links...",
         "normalising affect vectors...", "cooling emotional cores...", "stabilising sensations...",
@@ -1306,6 +1251,7 @@ def recalibrating_screen():
     footer = "press enter to continue"
 
     def next_chunk(cur):
+        # Slightly faster overall pacing than before
         if cur < 25:
             return random.randint(3, 6), random.uniform(0.15, 0.40)
         elif cur < 60:
@@ -1320,12 +1266,10 @@ def recalibrating_screen():
     blinking = True
     last_blink = pygame.time.get_ticks()
 
-    # Fill to 100% (Enter can fast-forward to 100)
     while progress < 100:
         for ev in events():
             if ev.type == pygame.KEYDOWN and ev.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
                 progress = 100
-
         if pygame.time.get_ticks() - last_task_swap > 1000:
             cur_task = random.choice(tasks)
             last_task_swap = pygame.time.get_ticks()
@@ -1356,13 +1300,11 @@ def recalibrating_screen():
                 pass
             time.sleep(0.01)
 
-    # 100% → wait for Enter, then fade ambient back up right with the lights
     while True:
         for ev in events():
             if ev.type == pygame.KEYDOWN and ev.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
                 wait_for_enter_release()
-                _light.fade_to(AMBIENT_LIGHT, duration_s=0.6)
-                audio_restore(fade_ms=1200)   # <-- slow fade back up here
+                _light.fade_to(AMBIENT_LIGHT, duration_s=0.6)  # <--- ADD THIS LINE HERE
                 return
 
         screen.fill(BG)
@@ -1387,8 +1329,11 @@ def recalibrating_screen():
         present()
         clock.tick(60)
 
+    # (after the loop where Enter continues)
+    _light.fade_to(AMBIENT_LIGHT, duration_s=0.6)
+
 # Scan hold screen
-def scan_hold_screen(min_hold_s=6.5):
+def scan_hold_screen(min_hold_s=5.0):
     """Show a 'scanning…' message, block Enter for min_hold_s, then unlock."""
     status = "scanning your page... please wait"
     unlock_ts = pygame.time.get_ticks() + int(min_hold_s * 1000)
@@ -2099,7 +2044,7 @@ def main_sequence():
             wait_for_enter_release()
             show_text_block(f"{blurb}", face_style="smile")
             wait_for_enter_release()
-            show_text_block(f"{name_caps} i have conversed with many others here at COUNIHAN GALLERY BRUNSWICK, and {pct}% of them were also the {archetype_caps}. you are in fine company.", face_style="smile")
+            show_text_block(f"{name_caps} i have conversed with many others here at MELBOURNE FRINGE TRADES HALL, and {pct}% of them were also the {archetype_caps}. you are in fine company.", face_style="smile")
             wait_for_enter_release()
             show_text_block("but i have come to understand that love cannot be categorised so easily.", face_style="neutral")
             wait_for_enter_release()

@@ -338,3 +338,29 @@
 2025-10-05T17:46:49.151649  eb7c7ff7-d0ef-426d-9c81-f402ca20e339  style=structured  seed=3391152953  name=REBEKAH  trait=INTUITIVE  archetype=OPTIMIST
 2025-10-06T15:30:48.458715  27fa10e5-1d1a-483e-8811-4465e117cfce  style=distinctive  seed=3776434126  name=LOUIE  trait=INTUITIVE  archetype=CYNIC
 2025-10-06T15:55:29.010286  d5a59b65-4956-4736-a06b-61e6d15ffbae  style=distinctive  seed=3512728494  name=PENNY  trait=SINCERE  archetype=CYNIC
+2025-10-06T17:21:56.651984  5edbd657-c98d-465f-ab1d-17acfbb47708  style=distinctive  seed=4222908168  name=MATT  trait=ATTENTIVE  archetype=REALIST
+2025-10-07T16:14:49.901140  7222f692-0ac2-4025-b1f9-210b5de349bd  style=structured  seed=1575176637  name=MILLY  trait=DETERMINED  archetype=REALIST
+2025-10-09T16:58:07.482824  08eb5a96-4f8a-42d9-bf93-76cde1f74096  style=structured  seed=3791077526  name=PARTICIPANT  trait=CURIOUS
+2025-10-09T16:58:14.746128  74a0a939-a02d-4659-9fbb-3c360444cfa6  style=distinctive  seed=71618470  name=PARTICIPANT  trait=CURIOUS
+2025-10-09T16:58:26.717728  aeaca52e-2f1d-4b7c-8520-b17e9f636dee  style=structured  seed=2674093550  name=PARTICIPANT  trait=CURIOUS
+2025-10-09T16:58:50.189117  3221d1a3-1c4e-4ff3-aafe-7129f23ad5a7  style=graphic  seed=4063942055  name=PARTICIPANT  trait=CURIOUS
+2025-10-09T17:00:39.813393  bbeac0e7-9a8c-478b-9722-58b350f65fe5  style=distinctive  seed=1358323685  name=PARTICIPANT  trait=CURIOUS
+2025-10-09T17:00:53.261893  8bc6fa1f-fb5b-4f8d-889f-1ada4c33b014  style=minimal  seed=1278455828  name=PARTICIPANT  trait=CURIOUS
+2025-10-10T22:21:26.195170  9bdcf762-8c3c-423b-8ecf-858ff6258aff  style=cloudy  seed=4129655551  name=AVA  trait=KIND  archetype=SEEKER
+2025-10-10T22:33:12.495403  59069f5e-8952-4230-a689-974bbf56e9c8  style=minimal  seed=3210144200  name=ANNELIESE  trait=ATTENTIVE  archetype=OPTIMIST
+2025-10-10T22:49:18.933527  66c34ada-fa26-438c-a282-f617c6ac40f8  style=structured  seed=3333177592  name=LUCY  trait=REFLECTIVE  archetype=REALIST
+2025-10-10T23:07:44.096490  c510b4f2-79c1-4d70-974a-3949df3adfb7  style=graphic  seed=3745177527  name=S  trait=IMAGINATIVE  archetype=SEEKER
+2025-10-10T23:22:07.125359  dc582e85-52df-4490-8374-43bd5307f330  style=structured  seed=1393029936  name=JO AND FLO  trait=WITTY  archetype=REALIST
+2025-10-10T23:36:41.328702  c04299a3-5a24-4a4b-a734-dca8b0892eee  style=minimal  seed=2961780462  name=JACEY  trait=INTUITIVE  archetype=OPTIMIST
+2025-10-10T23:56:17.629125  dc04e5df-c543-41de-b193-3bc78d25a373  style=graphic  seed=2368054131  name=LYLA  trait=DETERMINED  archetype=REALIST
+2025-10-11T00:06:17.418909  e857856f-8c47-4fd9-b75e-5b0a68ab079a  style=distinctive  seed=1756039066  name=VICTOR  trait=GROUNDED  archetype=ROMANTIC
+2025-10-11T00:27:21.627480  aec6793a-49af-432f-b924-941d18ff34be  style=graphic  seed=419378366  name=FRIEND  trait=KIND  archetype=OPTIMIST
+2025-10-11T00:38:57.497683  14bb52f6-9522-489e-ba18-2a7a2a4998fa  style=distinctive  seed=709466362  name=RUTHANNE  trait=KIND  archetype=REALIST
+2025-10-11T01:03:53.095369  f9d7d711-6b4f-4a9a-b9a8-75ec15c9de3e  style=distinctive  seed=365551166  name=JOYNAE  trait=STEADFAST  archetype=REALIST
+2025-10-11T01:40:37.374101  816db219-a9ec-484d-af6b-c81229da299e  style=minimal  seed=702163358  name=87  trait=STEADFAST  archetype=SEEKER
+2025-10-11T01:59:39.048438  160409dd-4012-42d4-91e0-fed312862046  style=structured  seed=310779974  name=YESHI  trait=GENTLE  archetype=OPTIMIST
+2025-10-11T02:15:57.861837  b0d4d1b0-1a4d-4fc4-87fa-c2c55346ece4  style=distinctive  seed=1397157092  name=MAGDALENA  trait=THOUGHTFUL  archetype=OPTIMIST
+2025-10-11T02:39:06.892633  ffdb086e-b58a-47fa-980f-34944ae86de0  style=cloudy  seed=1256746464  name=ELWOOD  trait=WITTY  archetype=REALIST
+2025-10-11T02:53:21.786045  677921a8-0648-48ff-8259-5b25312dd5d5  style=cloudy  seed=825087445  name=FRANCES AND IVAN  trait=GROUNDED  archetype=OPTIMIST
+2025-10-11T03:05:00.336910  b44e52f9-9ee3-471b-a767-74cab412006d  style=structured  seed=3021078637  name=SAMARAIGEORG  trait=REFLECTIVE  archetype=OPTIMIST
+2025-11-02T15:32:08.212507  42fc8d6f-f6a4-4b2c-8ca1-1f412ef3eda9  style=cloudy  seed=787738025  name=FRIEND  trait=OPEN HEARTED  archetype=ROMANTIC
